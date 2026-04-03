@@ -1,0 +1,99 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-1.1.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model AppStat {
+  id              Int      @id
+  lessonTotal     Int      @default(0) @map("lesson_total")
+  sentenceTotal   Int      @default(0) @map("sentence_total")
+  vocabularyTotal Int      @default(0) @map("vocabulary_total")
+  wrongTotal      Int      @default(0) @map("wrong_total")
+  bookmarkedTotal Int      @default(0) @map("bookmarked_total")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("app_stats")
+}
+
+model Lesson {
+  id           Int          @id @default(autoincrement())
+  title        String
+  category     String       @default("文章")
+  bookmarked   Boolean      @default(false)
+  sourceText   String       @map("source_text")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  sentences    Sentence[]
+  vocabularies Vocabulary[]
+  grammarItems Grammar[]
+
+  @@map("lessons")
+}
+
+model Sentence {
+  id            Int      @id @default(autoincrement())
+  lessonId      Int      @map("lesson_id")
+  sectionTitle  String   @map("section_title")
+  original      String
+  translationZh String   @map("translation_zh")
+  nextReviewAt  DateTime @default(now()) @map("next_review_at")
+  reviewStage   Int      @default(0) @map("review_stage")
+  reviewCount   Int      @default(0) @map("review_count")
+  correctCount  Int      @default(0) @map("correct_count")
+  wrongCount    Int      @default(0) @map("wrong_count")
+  lesson        Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@index([nextReviewAt])
+  @@map("sentences")
+}
+
+model Vocabulary {
+  id                 Int      @id @default(autoincrement())
+  lessonId           Int      @map("lesson_id")
+  sectionTitle       String   @map("section_title")
+  word               String
+  reading            String   @default("")
+  bookmarked         Boolean  @default(false)
+  mastered           Boolean  @default(false)
+  meaningZh          String   @map("meaning_zh")
+  exampleSentence    String   @default("") @map("example_sentence")
+  exampleTranslation String   @default("") @map("example_translation")
+  nextReviewAt       DateTime @default(now()) @map("next_review_at")
+  reviewStage        Int      @default(0) @map("review_stage")
+  reviewCount        Int      @default(0) @map("review_count")
+  correctCount       Int      @default(0) @map("correct_count")
+  wrongCount         Int      @default(0) @map("wrong_count")
+  lesson             Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@index([bookmarked])
+  @@index([mastered, nextReviewAt])
+  @@index([mastered, wrongCount])
+  @@map("vocabularies")
+}
+
+model Grammar {
+  id                 Int      @id @default(autoincrement())
+  lessonId           Int      @map("lesson_id")
+  sectionTitle       String   @map("section_title")
+  pattern            String
+  meaningZh          String   @map("meaning_zh")
+  explanation        String   @default("")
+  exampleSentence    String   @default("") @map("example_sentence")
+  exampleTranslation String   @default("") @map("example_translation")
+  nextReviewAt       DateTime @default(now()) @map("next_review_at")
+  reviewStage        Int      @default(0) @map("review_stage")
+  reviewCount        Int      @default(0) @map("review_count")
+  correctCount       Int      @default(0) @map("correct_count")
+  wrongCount         Int      @default(0) @map("wrong_count")
+  lesson             Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@index([nextReviewAt])
+  @@map("grammar_items")
+}

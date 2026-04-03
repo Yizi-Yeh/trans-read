@@ -1,0 +1,39 @@
+{
+  "name": "jp-n1",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "deploy:check": "npm run typecheck",
+    "deploy:app": "npm run prisma:generate && npm run build",
+    "deploy:bundle": "sh scripts/package-and-upload.sh",
+    "deploy:docker:build": "APP_RUNTIME_IMAGE=node:20-bookworm-slim docker compose --env-file .env.production up -d --force-recreate",
+    "deploy:docker:db": "sh -lc 'set -a; . ./.env.production; set +a; docker run --rm --network jp-n1_default -v \"$PWD/prisma\":/app/prisma -w /app -e DATABASE_URL=\"$DATABASE_URL\" node:20-bookworm-slim sh -lc \"apt-get update >/dev/null && apt-get install -y --no-install-recommends openssl >/dev/null && npm install -g prisma@6.19.2 >/dev/null && prisma db push --schema /app/prisma/schema.prisma\"'",
+    "deploy:docker": "npm run deploy:docker:build && npm run deploy:docker:db",
+    "deploy": "./scripts/deploy.sh"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^7.0.1",
+    "@mui/material": "^7.0.1",
+    "@mui/material-nextjs": "^7.0.1",
+    "@prisma/client": "^6.19.2",
+    "next": "^15.3.0",
+    "prisma": "^6.16.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "typescript": "^5.8.3"
+  }
+}

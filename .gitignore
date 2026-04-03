@@ -5,10 +5,10 @@ node_modules/
 .next/
 out/
 
-# local env files
-.env.local
-.env.production
-.env*.local
+# local env files (keep only examples)
+.env*
+!.env.example
+!.env.production.example
 
 # logs
 npm-debug.log*

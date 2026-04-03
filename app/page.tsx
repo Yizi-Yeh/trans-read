@@ -23,11 +23,12 @@ import {
   ListItemText,
   MenuItem,
   Select,
+  Snackbar,
   Stack,
   Tab,
   Tabs,
   TextField,
-  Typography
+  Typography,
 } from "@mui/material";
 import SaveRoundedIcon from "@mui/icons-material/SaveRounded";
 import AutoStoriesRoundedIcon from "@mui/icons-material/AutoStoriesRounded";
@@ -44,7 +45,12 @@ import BookmarkBorderRoundedIcon from "@mui/icons-material/BookmarkBorderRounded
 import BookmarkRoundedIcon from "@mui/icons-material/BookmarkRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import DoneRoundedIcon from "@mui/icons-material/DoneRounded";
-import type { ImportedLesson, LessonCategory, LessonDetail, ReviewCard } from "@/types/study";
+import type {
+  ImportedLesson,
+  LessonCategory,
+  LessonDetail,
+  ReviewCard,
+} from "@/types/study";
 
 function toTaipeiDateKey(value: string | Date) {
   const date = typeof value === "string" ? new Date(value) : value;
@@ -53,7 +59,7 @@ function toTaipeiDateKey(value: string | Date) {
     timeZone: "Asia/Taipei",
     year: "numeric",
     month: "2-digit",
-    day: "2-digit"
+    day: "2-digit",
   }).format(date);
 }
 
@@ -77,7 +83,13 @@ function applyTitleToSourceText(sourceText: string, title: string) {
 
 function renderCountTabLabel(label: string, count: number) {
   return (
-    <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="center" sx={{ whiteSpace: "nowrap", flexWrap: "nowrap" }}>
+    <Stack
+      direction="row"
+      spacing={0.75}
+      alignItems="center"
+      justifyContent="center"
+      sx={{ whiteSpace: "nowrap", flexWrap: "nowrap" }}
+    >
       <Box component="span" sx={{ whiteSpace: "nowrap" }}>
         {label}
       </Box>
@@ -90,8 +102,8 @@ function renderCountTabLabel(label: string, count: number) {
           "& .MuiChip-label": {
             px: 0.9,
             fontSize: 12,
-            fontWeight: 700
-          }
+            fontWeight: 700,
+          },
         }}
       />
     </Stack>
@@ -104,12 +116,18 @@ function findSentenceForVocabularyCard(lesson: LessonDetail, card: ReviewCard) {
   }
 
   const vocabularyItem = lesson.vocabulary.find((item) => item.id === card.id);
-  const keywords = [vocabularyItem?.word, card.prompt, vocabularyItem?.exampleSentence]
+  const keywords = [
+    vocabularyItem?.word,
+    card.prompt,
+    vocabularyItem?.exampleSentence,
+  ]
     .filter((value): value is string => Boolean(value?.trim()))
     .map((value) => value.trim());
 
   for (const keyword of keywords) {
-    const matchedSentence = lesson.sentences.find((sentence) => sentence.original.includes(keyword));
+    const matchedSentence = lesson.sentences.find((sentence) =>
+      sentence.original.includes(keyword),
+    );
     if (matchedSentence) {
       return matchedSentence;
     }
@@ -128,7 +146,7 @@ function toLessonSummary(lesson: LessonDetail): ImportedLesson {
     vocabularyCount: lesson.vocabulary.length,
     grammarCount: lesson.grammar.length,
     vocabularyPreview: lesson.vocabulary.slice(0, 6).map((item) => item.word),
-    grammarPreview: lesson.grammar.slice(0, 6).map((item) => item.pattern)
+    grammarPreview: lesson.grammar.slice(0, 6).map((item) => item.pattern),
   };
 }
 
@@ -161,13 +179,32 @@ type BookmarkedVocabularyItem = {
 };
 
 const UI_STATE_STORAGE_KEY = "jp-n1-ui-state";
+const AI_LOADING_HINTS = [
+  "AI 正在閱讀內容...",
+  "AI 正在進行 OCR 與語意理解...",
+  "AI 正在整理 N1 解析格式...",
+];
 
 type StoredUiState = {
   activeTab: "lessons" | "detail" | "review" | "bookmarks" | "wrongs";
   activeDetailTab: "sentences" | "vocabulary" | "grammar";
   lessonFilter: LessonCategory;
-  mobileBackTab: "home" | "library" | "detail" | "review" | "bookmarks" | "wrongs" | "import";
-  mobileTab: "home" | "library" | "detail" | "review" | "bookmarks" | "wrongs" | "import";
+  mobileBackTab:
+    | "home"
+    | "library"
+    | "detail"
+    | "review"
+    | "bookmarks"
+    | "wrongs"
+    | "import";
+  mobileTab:
+    | "home"
+    | "library"
+    | "detail"
+    | "review"
+    | "bookmarks"
+    | "wrongs"
+    | "import";
   reviewMode: "all" | "wrong";
   selectedLessonId: number | null;
   vocabularyViewMode: "lesson" | "bookmarked";
@@ -185,6 +222,170 @@ type HighlightTarget = {
   kind: "sentence" | "vocabulary" | "grammar";
 };
 
+type VocabularyDisplayItem = {
+  id: number;
+  word: string;
+  reading: string;
+  meaningZh: string;
+  exampleSentence: string;
+  exampleTranslation: string;
+  bookmarked: boolean;
+  lessonTitle: string;
+};
+
+function pickLabeledValue(text: string, labels: string[]) {
+  for (const label of labels) {
+    const match = text.match(new RegExp(`${label}[：:]\\s*([^\\n]+)`));
+    if (match?.[1]?.trim()) {
+      return match[1].trim();
+    }
+  }
+  return "";
+}
+
+function stripLabelPrefix(value: string, labels: string[]) {
+  if (!value.trim()) {
+    return "";
+  }
+
+  const pattern = new RegExp(`^(${labels.join("|")})[：:]\\s*`);
+  return value.replace(pattern, "").trim();
+}
+
+function sanitizeDisplayValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const blocked = [
+    "單字解析",
+    "文法解析",
+    "例句",
+    "常用使用場景",
+    "原句",
+    "中文翻譯",
+    "無"
+  ];
+
+  if (blocked.includes(trimmed.replace(/[：:]/g, ""))) {
+    return "";
+  }
+
+  if (/^(單字解析|文法解析|例句|常用使用場景|原句|中文翻譯)[：:]?$/.test(trimmed)) {
+    return "";
+  }
+
+  return trimmed;
+}
+
+function normalizeVocabularyDisplayItem(item: VocabularyDisplayItem): VocabularyDisplayItem {
+  const combined = [item.word, item.reading, item.meaningZh, item.exampleSentence, item.exampleTranslation].join("\n");
+
+  const word = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.word, ["日文", "單字"]) ||
+    pickLabeledValue(combined, ["日文", "單字"]) ||
+    item.word
+    ).trim()
+  );
+  const reading = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.reading, ["假名", "讀音"]) ||
+    pickLabeledValue(combined, ["假名", "讀音"]) ||
+    item.reading
+    ).trim()
+  );
+  const meaningZh = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.meaningZh, ["中文意思", "意思", "意義"]) ||
+    pickLabeledValue(combined, ["中文意思", "意思", "意義"]) ||
+    item.meaningZh
+    ).trim()
+  );
+  const exampleSentence = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.exampleSentence, ["單字例句", "例句"]) ||
+    pickLabeledValue(combined, ["單字例句", "例句"]) ||
+    item.exampleSentence
+    ).trim()
+  );
+  const exampleTranslation = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.exampleTranslation, ["單字例句中文", "例句中文", "中文翻譯"]) ||
+    pickLabeledValue(combined, ["單字例句中文", "例句中文", "中文翻譯"]) ||
+    item.exampleTranslation
+    ).trim()
+  );
+  const splitPair = !exampleTranslation && exampleSentence.includes("｜") ? exampleSentence.split("｜") : null;
+
+  return {
+    ...item,
+    word,
+    reading,
+    meaningZh: meaningZh === "無" ? "" : meaningZh,
+    exampleSentence: exampleSentence === "無" ? "" : (splitPair?.[0]?.trim() || exampleSentence),
+    exampleTranslation: exampleTranslation === "無" ? "" : (splitPair?.[1]?.trim() || exampleTranslation)
+  };
+}
+
+function normalizeSentenceDisplayItem(item: { original: string; translationZh: string }) {
+  return {
+    original: sanitizeDisplayValue(stripLabelPrefix(item.original, ["原句", "原文"]).trim()),
+    translationZh: sanitizeDisplayValue(stripLabelPrefix(item.translationZh, ["中文翻譯", "中文", "翻譯"]).trim())
+  };
+}
+
+function normalizeGrammarDisplayItem(item: {
+  pattern: string;
+  meaningZh: string;
+  explanation: string;
+  exampleSentence: string;
+  exampleTranslation: string;
+}) {
+  const combined = [item.pattern, item.meaningZh, item.explanation, item.exampleSentence, item.exampleTranslation].join("\n");
+  const pattern = sanitizeDisplayValue(
+    (stripLabelPrefix(item.pattern, ["文法"]) || pickLabeledValue(combined, ["文法"]) || item.pattern).trim()
+  );
+  const meaningZh = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.meaningZh, ["意思", "意義"]) ||
+    pickLabeledValue(combined, ["意思", "意義"]) ||
+    item.meaningZh
+    ).trim()
+  );
+  const explanation = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.explanation, ["語氣／用法說明", "語氣/用法說明", "語氣／用法", "語氣/用法", "語氣與用法說明", "語氣與用法", "用法說明", "說明"]) ||
+    pickLabeledValue(combined, ["語氣／用法說明", "語氣/用法說明", "語氣／用法", "語氣/用法", "語氣與用法說明", "語氣與用法", "用法說明", "說明"]) ||
+    item.explanation
+    ).trim()
+  );
+  const exampleSentence = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.exampleSentence, ["例句", "日文"]) ||
+    pickLabeledValue(combined, ["例句", "日文"]) ||
+    item.exampleSentence
+    ).trim()
+  );
+  const exampleTranslation = sanitizeDisplayValue(
+    (
+    stripLabelPrefix(item.exampleTranslation, ["中文", "中文翻譯", "例句中文"]) ||
+    pickLabeledValue(combined, ["中文", "中文翻譯", "例句中文"]) ||
+    item.exampleTranslation
+    ).trim()
+  );
+  const splitPair = !exampleTranslation && exampleSentence.includes("｜") ? exampleSentence.split("｜") : null;
+
+  return {
+    pattern,
+    meaningZh: meaningZh === "無" ? "" : meaningZh,
+    explanation: explanation === "無" ? "" : explanation,
+    exampleSentence: exampleSentence === "無" ? "" : (splitPair?.[0]?.trim() || exampleSentence),
+    exampleTranslation: exampleTranslation === "無" ? "" : (splitPair?.[1]?.trim() || exampleTranslation)
+  };
+}
+
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit) {
   const response = await fetch(input, init);
   const text = await response.text();
@@ -192,21 +393,23 @@ async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit) {
   if (!text.trim()) {
     return {
       response,
-      payload: { error: "伺服器沒有回傳資料。" } as { error: string }
+      payload: { error: "伺服器沒有回傳資料。" } as { error: string },
     };
   }
 
   try {
     return {
       response,
-      payload: JSON.parse(text) as T | { error: string }
+      payload: JSON.parse(text) as T | { error: string },
     };
   } catch {
     return {
       response,
       payload: {
-        error: response.ok ? "伺服器回傳格式錯誤。" : `伺服器暫時發生錯誤（${response.status}）。`
-      } as { error: string }
+        error: response.ok
+          ? "伺服器回傳格式錯誤。"
+          : `伺服器暫時發生錯誤（${response.status}）。`,
+      } as { error: string },
     };
   }
 }
@@ -214,25 +417,36 @@ async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit) {
 export default function HomePage() {
   const [lessonFilter, setLessonFilter] = useState<LessonCategory>("文章");
   const [reviewMode, setReviewMode] = useState<"all" | "wrong">("all");
-  const [vocabularyViewMode, setVocabularyViewMode] = useState<"lesson" | "bookmarked">("lesson");
+  const [vocabularyViewMode, setVocabularyViewMode] = useState<
+    "lesson" | "bookmarked"
+  >("lesson");
   const [sourceText, setSourceText] = useState("");
   const [lessons, setLessons] = useState<ImportedLesson[]>([]);
   const [selectedLessonId, setSelectedLessonId] = useState<number | null>(null);
-  const [selectedLesson, setSelectedLesson] = useState<LessonDetail | null>(null);
+  const [selectedLesson, setSelectedLesson] = useState<LessonDetail | null>(
+    null,
+  );
   const [category, setCategory] = useState<LessonCategory>("文章");
   const [editingTitle, setEditingTitle] = useState("");
-  const [editingCategory, setEditingCategory] = useState<LessonCategory>("文章");
+  const [editingCategory, setEditingCategory] =
+    useState<LessonCategory>("文章");
   const [editingLessonText, setEditingLessonText] = useState("");
   const [isEditingLesson, setIsEditingLesson] = useState(false);
   const [cards, setCards] = useState<ReviewCard[]>([]);
   const [wrongCards, setWrongCards] = useState<ReviewCard[]>([]);
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"lessons" | "detail" | "review" | "bookmarks" | "wrongs">("detail");
-  const [activeDetailTab, setActiveDetailTab] = useState<"sentences" | "vocabulary" | "grammar">("sentences");
-  const [mobileTab, setMobileTab] = useState<"home" | "library" | "detail" | "review" | "bookmarks" | "wrongs" | "import">("home");
-  const [mobileBackTab, setMobileBackTab] = useState<"home" | "library" | "detail" | "review" | "bookmarks" | "wrongs" | "import">(
-    "home"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "lessons" | "detail" | "review" | "bookmarks" | "wrongs"
+  >("detail");
+  const [activeDetailTab, setActiveDetailTab] = useState<
+    "sentences" | "vocabulary" | "grammar"
+  >("sentences");
+  const [mobileTab, setMobileTab] = useState<
+    "home" | "library" | "detail" | "review" | "bookmarks" | "wrongs" | "import"
+  >("home");
+  const [mobileBackTab, setMobileBackTab] = useState<
+    "home" | "library" | "detail" | "review" | "bookmarks" | "wrongs" | "import"
+  >("home");
   const [deleteTarget, setDeleteTarget] = useState<
     | { mode: "single"; id: number; title: string }
     | { mode: "all"; count: number }
@@ -244,68 +458,101 @@ export default function HomePage() {
   const [hydrating, setHydrating] = useState(true);
   const [loadingLesson, setLoadingLesson] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [generatingAi, setGeneratingAi] = useState(false);
+  const [aiHintIndex, setAiHintIndex] = useState(0);
+  const [aiImage, setAiImage] = useState<File | null>(null);
   const [savingLesson, setSavingLesson] = useState(false);
   const [savingTitle, setSavingTitle] = useState(false);
   const [deletingLesson, setDeletingLesson] = useState(false);
   const [reviewing, setReviewing] = useState(false);
-  const [bookmarkedVocabulary, setBookmarkedVocabulary] = useState<BookmarkedVocabularyItem[]>([]);
+  const [bookmarkedVocabulary, setBookmarkedVocabulary] = useState<
+    BookmarkedVocabularyItem[]
+  >([]);
   const [wrongPreviewCards, setWrongPreviewCards] = useState<ReviewCard[]>([]);
-  const [pendingReviewTarget, setPendingReviewTarget] = useState<ReviewTarget | null>(null);
-  const [highlightTarget, setHighlightTarget] = useState<HighlightTarget | null>(null);
+  const [pendingReviewTarget, setPendingReviewTarget] =
+    useState<ReviewTarget | null>(null);
+  const [highlightTarget, setHighlightTarget] =
+    useState<HighlightTarget | null>(null);
   const [stats, setStats] = useState({
     lessonTotal: 0,
     sentenceTotal: 0,
     vocabularyTotal: 0,
     dueTotal: 0,
     wrongTotal: 0,
-    bookmarkedTotal: 0
+    bookmarkedTotal: 0,
   });
 
   const currentCard = cards[0] ?? null;
   const isCorrect = currentCard ? selectedChoice === currentCard.answer : false;
-  const filteredLessons = lessons.filter((lesson) => lesson.category === lessonFilter);
+  const filteredLessons = lessons.filter(
+    (lesson) => lesson.category === lessonFilter,
+  );
   const mobileCardSx = {
     border: "1px solid rgba(31,29,26,0.06)",
     borderRadius: "22px",
     boxShadow: "0 6px 18px rgba(34, 38, 43, 0.04)",
-    backgroundColor: "#ffffff"
+    backgroundColor: "#ffffff",
   } as const;
   const articleSentenceSx = {
-    fontFamily: '"Hiragino Sans", "Yu Gothic", "Noto Sans JP", "PingFang TC", "Noto Sans TC", sans-serif',
+    fontFamily:
+      '"Hiragino Sans", "Yu Gothic", "Noto Sans JP", "PingFang TC", "Noto Sans TC", sans-serif',
     fontSize: { xs: 16, sm: 17, md: 18 },
     fontWeight: 800,
     lineHeight: 1.68,
     letterSpacing: "0.01em",
-    color: "#242424"
+    color: "#242424",
   } as const;
   const articleTranslationSx = {
     mt: 1,
     fontSize: 16,
     lineHeight: 1.7,
     letterSpacing: "0.01em",
-    color: "rgba(107, 114, 128, 0.95)"
+    color: "rgba(107, 114, 128, 0.95)",
   } as const;
   const masteredButtonSx = {
     py: 1.35,
     "&.Mui-disabled": {
-      backgroundColor: "#edf4f2",
-      borderColor: "#d9e6e2",
-      color: "#5f6b68"
+      backgroundColor: "#e8eefb",
+      borderColor: "#d2def6",
+      color: "#6b7da1",
     },
     "&.Mui-disabled .MuiButton-startIcon": {
-      color: "#7d8a86"
-    }
+      color: "#91a1c2",
+    },
   } as const;
   const reviewActionButtonSx = {
     py: 1.35,
     "&.Mui-disabled": {
-      backgroundColor: "#edf4f2",
-      borderColor: "#d9e6e2",
-      color: "#5f6b68"
+      backgroundColor: "#e8eefb",
+      borderColor: "#d2def6",
+      color: "#6b7da1",
     },
     "&.Mui-disabled .MuiButton-startIcon": {
-      color: "#7d8a86"
-    }
+      color: "#91a1c2",
+    },
+  } as const;
+  const importActionButtonSx = {
+    width: "100%",
+    py: 1.2,
+  } as const;
+  const importSourceTextFieldSx = {
+    flex: 1,
+    minHeight: 0,
+    "& .MuiInputBase-root": {
+      height: "100%",
+      alignItems: "stretch",
+      overflow: "hidden",
+    },
+    "& .MuiInputBase-inputMultiline": {
+      height: "100% !important",
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
+      resize: "none",
+    },
+    "& textarea": {
+      overflowY: "auto !important",
+      WebkitOverflowScrolling: "touch",
+    },
   } as const;
 
   const syncDashboard = (payload: DashboardPayload) => {
@@ -317,7 +564,10 @@ export default function HomePage() {
     void loadWrongPreview();
   };
 
-  const syncCardsAndStats = (nextCards: ReviewCard[], nextStats: DashboardStats) => {
+  const syncCardsAndStats = (
+    nextCards: ReviewCard[],
+    nextStats: DashboardStats,
+  ) => {
     setCards(nextCards);
     setStats(nextStats);
     setSelectedChoice(null);
@@ -339,18 +589,40 @@ export default function HomePage() {
   };
 
   const openMobileTab = (
-    nextTab: "home" | "library" | "detail" | "review" | "bookmarks" | "wrongs" | "import",
-    backTo: "home" | "library" | "detail" | "review" | "bookmarks" | "wrongs" | "import" = mobileTab
+    nextTab:
+      | "home"
+      | "library"
+      | "detail"
+      | "review"
+      | "bookmarks"
+      | "wrongs"
+      | "import",
+    backTo:
+      | "home"
+      | "library"
+      | "detail"
+      | "review"
+      | "bookmarks"
+      | "wrongs"
+      | "import" = mobileTab,
   ) => {
     setMobileBackTab(backTo);
     setMobileTab(nextTab);
   };
 
-  const detailTabForReviewKind = (kind: ReviewCard["kind"]): "sentences" | "vocabulary" | "grammar" =>
-    kind === "sentence" ? "sentences" : kind === "vocabulary" ? "vocabulary" : "grammar";
+  const detailTabForReviewKind = (
+    kind: ReviewCard["kind"],
+  ): "sentences" | "vocabulary" | "grammar" =>
+    kind === "sentence"
+      ? "sentences"
+      : kind === "vocabulary"
+        ? "vocabulary"
+        : "grammar";
 
   const loadBookmarkedVocabulary = async () => {
-    const { response, payload } = await requestJson<{ vocabulary: BookmarkedVocabularyItem[] }>("/api/vocabulary");
+    const { response, payload } = await requestJson<{
+      vocabulary: BookmarkedVocabularyItem[];
+    }>("/api/vocabulary");
 
     if (!response.ok || !("vocabulary" in payload)) {
       throw new Error("error" in payload ? payload.error : "讀取標記單字失敗");
@@ -369,12 +641,18 @@ export default function HomePage() {
         openMobileTab("bookmarks", mobileTab);
       }
     } catch (bookmarkError) {
-      setError(bookmarkError instanceof Error ? bookmarkError.message : "讀取標記單字失敗");
+      setError(
+        bookmarkError instanceof Error
+          ? bookmarkError.message
+          : "讀取標記單字失敗",
+      );
     }
   };
 
   const loadWrongPreview = async () => {
-    const { response, payload } = await requestJson<DashboardPayload>("/api/review?mode=wrong");
+    const { response, payload } = await requestJson<DashboardPayload>(
+      "/api/review?mode=wrong",
+    );
 
     if (!response.ok || !("cards" in payload)) {
       throw new Error("error" in payload ? payload.error : "讀取答錯內容失敗");
@@ -385,7 +663,9 @@ export default function HomePage() {
   };
 
   const loadWrongCards = async () => {
-    const { response, payload } = await requestJson<DashboardPayload>("/api/review?mode=wrong");
+    const { response, payload } = await requestJson<DashboardPayload>(
+      "/api/review?mode=wrong",
+    );
 
     if (!response.ok || !("cards" in payload)) {
       throw new Error("error" in payload ? payload.error : "讀取答錯內容失敗");
@@ -404,12 +684,16 @@ export default function HomePage() {
         openMobileTab("wrongs", mobileTab);
       }
     } catch (wrongError) {
-      setError(wrongError instanceof Error ? wrongError.message : "讀取答錯內容失敗");
+      setError(
+        wrongError instanceof Error ? wrongError.message : "讀取答錯內容失敗",
+      );
     }
   };
 
   const loadDashboard = async (mode: "all" | "wrong" = reviewMode) => {
-    const { response, payload } = await requestJson<DashboardPayload>(`/api/review?mode=${mode}`);
+    const { response, payload } = await requestJson<DashboardPayload>(
+      `/api/review?mode=${mode}`,
+    );
 
     if (!response.ok || !("cards" in payload)) {
       throw new Error("error" in payload ? payload.error : "讀取資料失敗");
@@ -421,12 +705,14 @@ export default function HomePage() {
 
   const loadLesson = async (
     lessonId: number,
-    options?: { detailTab?: "sentences" | "vocabulary" | "grammar" }
+    options?: { detailTab?: "sentences" | "vocabulary" | "grammar" },
   ) => {
     setLoadingLesson(true);
 
     try {
-      const { response, payload } = await requestJson<{ lesson: LessonDetail }>(`/api/lessons/${lessonId}`);
+      const { response, payload } = await requestJson<{ lesson: LessonDetail }>(
+        `/api/lessons/${lessonId}`,
+      );
 
       if (!response.ok || !("lesson" in payload)) {
         throw new Error("error" in payload ? payload.error : "讀取文章失敗");
@@ -444,7 +730,9 @@ export default function HomePage() {
       setActiveDetailTab(options?.detailTab ?? "sentences");
       return payload.lesson;
     } catch (lessonError) {
-      setError(lessonError instanceof Error ? lessonError.message : "讀取文章失敗");
+      setError(
+        lessonError instanceof Error ? lessonError.message : "讀取文章失敗",
+      );
       return null;
     } finally {
       setLoadingLesson(false);
@@ -452,8 +740,13 @@ export default function HomePage() {
   };
 
   const openReviewCardSource = async (card: ReviewCard) => {
-    const initialDetailTab = card.kind === "vocabulary" ? "sentences" : detailTabForReviewKind(card.kind);
-    const lesson = await loadLesson(card.lessonId, { detailTab: initialDetailTab });
+    const initialDetailTab =
+      card.kind === "vocabulary"
+        ? "sentences"
+        : detailTabForReviewKind(card.kind);
+    const lesson = await loadLesson(card.lessonId, {
+      detailTab: initialDetailTab,
+    });
 
     if (!lesson) {
       return;
@@ -467,7 +760,7 @@ export default function HomePage() {
         id: card.id,
         kind: "vocabulary",
         detailTab: "vocabulary",
-        lessonId: card.lessonId
+        lessonId: card.lessonId,
       });
       return;
     }
@@ -475,13 +768,19 @@ export default function HomePage() {
     setPendingReviewTarget({
       id: matchedSentence?.id ?? card.id,
       kind: matchedSentence ? "sentence" : card.kind,
-      detailTab: matchedSentence ? "sentences" : detailTabForReviewKind(card.kind),
-      lessonId: card.lessonId
+      detailTab: matchedSentence
+        ? "sentences"
+        : detailTabForReviewKind(card.kind),
+      lessonId: card.lessonId,
     });
   };
 
   useEffect(() => {
-    if (!pendingReviewTarget || !selectedLesson || selectedLessonId !== pendingReviewTarget.lessonId) {
+    if (
+      !pendingReviewTarget ||
+      !selectedLesson ||
+      selectedLessonId !== pendingReviewTarget.lessonId
+    ) {
       return;
     }
 
@@ -491,11 +790,17 @@ export default function HomePage() {
 
     const selector = `[data-review-kind="${pendingReviewTarget.kind}"][data-review-id="${pendingReviewTarget.id}"]`;
     const scrollToTarget = () => {
-      const elements = Array.from(document.querySelectorAll<HTMLElement>(selector));
+      const elements = Array.from(
+        document.querySelectorAll<HTMLElement>(selector),
+      );
       const element =
         elements.find((candidate) => {
           const style = window.getComputedStyle(candidate);
-          return style.display !== "none" && style.visibility !== "hidden" && candidate.getClientRects().length > 0;
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            candidate.getClientRects().length > 0
+          );
         }) ?? elements[0];
 
       if (!element) {
@@ -505,7 +810,7 @@ export default function HomePage() {
       element.scrollIntoView({ behavior: "smooth", block: "center" });
       setHighlightTarget({
         id: pendingReviewTarget.id,
-        kind: pendingReviewTarget.kind
+        kind: pendingReviewTarget.kind,
       });
       setPendingReviewTarget(null);
     };
@@ -521,7 +826,10 @@ export default function HomePage() {
 
     const timeoutId = window.setTimeout(() => {
       setHighlightTarget((current) =>
-        current?.id === highlightTarget.id && current.kind === highlightTarget.kind ? null : current
+        current?.id === highlightTarget.id &&
+        current.kind === highlightTarget.kind
+          ? null
+          : current,
       );
     }, 2200);
 
@@ -529,7 +837,11 @@ export default function HomePage() {
   }, [highlightTarget]);
 
   const handleUpdateLesson = async () => {
-    if (!selectedLessonId || !editingLessonText.trim() || !editingTitle.trim()) {
+    if (
+      !selectedLessonId ||
+      !editingLessonText.trim() ||
+      !editingTitle.trim()
+    ) {
       setError("請先輸入標題與編輯後的文章內容。");
       return;
     }
@@ -539,20 +851,30 @@ export default function HomePage() {
     setSuccess(null);
 
     try {
-      const sourceTextWithTitle = applyTitleToSourceText(editingLessonText, editingTitle);
-      const { response, payload } = await requestJson<
-        {
-          cards: ReviewCard[];
-          stats: DashboardStats;
-          lesson: LessonDetail | null;
-          data: { title: string; category: LessonCategory; sentenceCount: number; vocabularyCount: number; grammarCount: number };
-        }
-      >(`/api/lessons/${selectedLessonId}`, {
+      const sourceTextWithTitle = applyTitleToSourceText(
+        editingLessonText,
+        editingTitle,
+      );
+      const { response, payload } = await requestJson<{
+        cards: ReviewCard[];
+        stats: DashboardStats;
+        lesson: LessonDetail | null;
+        data: {
+          title: string;
+          category: LessonCategory;
+          sentenceCount: number;
+          vocabularyCount: number;
+          grammarCount: number;
+        };
+      }>(`/api/lessons/${selectedLessonId}`, {
         method: "PATCH",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ sourceText: sourceTextWithTitle, category: editingCategory })
+        body: JSON.stringify({
+          sourceText: sourceTextWithTitle,
+          category: editingCategory,
+        }),
       });
 
       if (!response.ok || !("lesson" in payload) || !("data" in payload)) {
@@ -568,10 +890,12 @@ export default function HomePage() {
       setEditingTitle(payload.lesson?.title ?? editingTitle.trim());
       setIsEditingLesson(false);
       setSuccess(
-        `已編輯《${payload.data.title}》，目前共有 ${payload.data.sentenceCount} 句、${payload.data.vocabularyCount} 個單字、${payload.data.grammarCount} 筆文法。`
+        `已編輯《${payload.data.title}》，目前共有 ${payload.data.sentenceCount} 句、${payload.data.vocabularyCount} 個單字、${payload.data.grammarCount} 筆文法。`,
       );
     } catch (updateError) {
-      setError(updateError instanceof Error ? updateError.message : "編輯文章失敗");
+      setError(
+        updateError instanceof Error ? updateError.message : "編輯文章失敗",
+      );
     } finally {
       setSavingLesson(false);
     }
@@ -588,19 +912,20 @@ export default function HomePage() {
     setSuccess(null);
 
     try {
-      const { response, payload } = await requestJson<
-        {
-          cards: ReviewCard[];
-          stats: DashboardStats;
-          lesson: LessonDetail | null;
-          data: { title: string; category: LessonCategory };
-        }
-      >(`/api/lessons/${selectedLessonId}`, {
+      const { response, payload } = await requestJson<{
+        cards: ReviewCard[];
+        stats: DashboardStats;
+        lesson: LessonDetail | null;
+        data: { title: string; category: LessonCategory };
+      }>(`/api/lessons/${selectedLessonId}`, {
         method: "PATCH",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ title: editingTitle.trim(), category: editingCategory })
+        body: JSON.stringify({
+          title: editingTitle.trim(),
+          category: editingCategory,
+        }),
       });
 
       if (!response.ok || !("lesson" in payload)) {
@@ -613,34 +938,39 @@ export default function HomePage() {
         upsertLessonSummary(payload.lesson);
       }
       setEditingTitle(payload.lesson?.title ?? "");
-      setEditingCategory((payload.lesson?.category ?? "文章") as LessonCategory);
+      setEditingCategory(
+        (payload.lesson?.category ?? "文章") as LessonCategory,
+      );
       setSuccess(`已編輯標題為《${payload.data.title}》。`);
     } catch (updateError) {
-      setError(updateError instanceof Error ? updateError.message : "編輯標題失敗");
+      setError(
+        updateError instanceof Error ? updateError.message : "編輯標題失敗",
+      );
     } finally {
       setSavingTitle(false);
     }
   };
 
-  const handleUpdateCategory = async (lessonId: number, nextCategory: LessonCategory) => {
+  const handleUpdateCategory = async (
+    lessonId: number,
+    nextCategory: LessonCategory,
+  ) => {
     setSavingTitle(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const { response, payload } = await requestJson<
-        {
-          cards: ReviewCard[];
-          stats: DashboardStats;
-          lesson: LessonDetail | null;
-          data: { title: string; category: LessonCategory };
-        }
-      >(`/api/lessons/${lessonId}`, {
+      const { response, payload } = await requestJson<{
+        cards: ReviewCard[];
+        stats: DashboardStats;
+        lesson: LessonDetail | null;
+        data: { title: string; category: LessonCategory };
+      }>(`/api/lessons/${lessonId}`, {
         method: "PATCH",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ category: nextCategory })
+        body: JSON.stringify({ category: nextCategory }),
       });
 
       if (!response.ok || !("lesson" in payload)) {
@@ -655,34 +985,39 @@ export default function HomePage() {
 
       if (selectedLessonId === lessonId && payload.lesson) {
         setSelectedLesson(payload.lesson);
-        setEditingCategory((payload.lesson?.category ?? nextCategory) as LessonCategory);
+        setEditingCategory(
+          (payload.lesson?.category ?? nextCategory) as LessonCategory,
+        );
       }
     } catch (updateError) {
-      setError(updateError instanceof Error ? updateError.message : "更新分類失敗");
+      setError(
+        updateError instanceof Error ? updateError.message : "更新分類失敗",
+      );
     } finally {
       setSavingTitle(false);
     }
   };
 
-  const handleToggleVocabularyBookmark = async (vocabularyId: number, bookmarked: boolean) => {
+  const handleToggleVocabularyBookmark = async (
+    vocabularyId: number,
+    bookmarked: boolean,
+  ) => {
     setSavingTitle(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const { response, payload } = await requestJson<
-        {
-          cards: ReviewCard[];
-          stats: DashboardStats;
-          lesson: LessonDetail | null;
-          data: { vocabularyId: number; bookmarked: boolean; lessonId: number };
-        }
-      >(`/api/vocabulary/${vocabularyId}`, {
+      const { response, payload } = await requestJson<{
+        cards: ReviewCard[];
+        stats: DashboardStats;
+        lesson: LessonDetail | null;
+        data: { vocabularyId: number; bookmarked: boolean; lessonId: number };
+      }>(`/api/vocabulary/${vocabularyId}`, {
         method: "PATCH",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ bookmarked })
+        body: JSON.stringify({ bookmarked }),
       });
 
       if (!response.ok || !("lesson" in payload)) {
@@ -698,7 +1033,9 @@ export default function HomePage() {
         await loadBookmarkedVocabulary();
       }
     } catch (bookmarkError) {
-      setError(bookmarkError instanceof Error ? bookmarkError.message : "更新標記失敗");
+      setError(
+        bookmarkError instanceof Error ? bookmarkError.message : "更新標記失敗",
+      );
     } finally {
       setSavingTitle(false);
     }
@@ -714,23 +1051,23 @@ export default function HomePage() {
     setSuccess(null);
 
     try {
-      const { response, payload } = await requestJson<
-        {
-          cards: ReviewCard[];
-          stats: DashboardStats;
-          lesson: LessonDetail | null;
-          data: { vocabularyId: number; mastered: boolean; lessonId: number };
-        }
-      >(`/api/vocabulary/${card.id}`, {
+      const { response, payload } = await requestJson<{
+        cards: ReviewCard[];
+        stats: DashboardStats;
+        lesson: LessonDetail | null;
+        data: { vocabularyId: number; mastered: boolean; lessonId: number };
+      }>(`/api/vocabulary/${card.id}`, {
         method: "PATCH",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ mastered: true })
+        body: JSON.stringify({ mastered: true }),
       });
 
       if (!response.ok || !("lesson" in payload)) {
-        throw new Error("error" in payload ? payload.error : "更新學會狀態失敗");
+        throw new Error(
+          "error" in payload ? payload.error : "更新學會狀態失敗",
+        );
       }
 
       syncCardsAndStats(payload.cards, payload.stats);
@@ -743,7 +1080,9 @@ export default function HomePage() {
         await loadBookmarkedVocabulary();
       }
     } catch (masterError) {
-      setError(masterError instanceof Error ? masterError.message : "更新學會狀態失敗");
+      setError(
+        masterError instanceof Error ? masterError.message : "更新學會狀態失敗",
+      );
     } finally {
       setReviewing(false);
     }
@@ -757,7 +1096,7 @@ export default function HomePage() {
     setDeleteTarget({
       mode: "single",
       id: selectedLesson.id,
-      title: selectedLesson.title
+      title: selectedLesson.title,
     });
   };
 
@@ -767,9 +1106,12 @@ export default function HomePage() {
     setSuccess(null);
 
     try {
-      const { response, payload } = await requestJson<DashboardPayload>("/api/lessons", {
-        method: "DELETE"
-      });
+      const { response, payload } = await requestJson<DashboardPayload>(
+        "/api/lessons",
+        {
+          method: "DELETE",
+        },
+      );
 
       if (!response.ok || !("cards" in payload)) {
         throw new Error("error" in payload ? payload.error : "全部刪除失敗");
@@ -783,22 +1125,30 @@ export default function HomePage() {
       setIsEditingLesson(false);
       setSuccess("已刪除全部文章。");
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "全部刪除失敗");
+      setError(
+        deleteError instanceof Error ? deleteError.message : "全部刪除失敗",
+      );
     } finally {
       setDeletingLesson(false);
       setDeleteTarget(null);
     }
   };
 
-  const handleDeleteLessonById = async (lessonId: number, lessonTitle: string) => {
+  const handleDeleteLessonById = async (
+    lessonId: number,
+    lessonTitle: string,
+  ) => {
     setDeletingLesson(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const { response, payload } = await requestJson<DashboardPayload>(`/api/lessons/${lessonId}`, {
-        method: "DELETE"
-      });
+      const { response, payload } = await requestJson<DashboardPayload>(
+        `/api/lessons/${lessonId}`,
+        {
+          method: "DELETE",
+        },
+      );
 
       if (!response.ok || !("cards" in payload)) {
         throw new Error("error" in payload ? payload.error : "刪除文章失敗");
@@ -822,7 +1172,9 @@ export default function HomePage() {
 
       setSuccess("文章已刪除。");
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "刪除文章失敗");
+      setError(
+        deleteError instanceof Error ? deleteError.message : "刪除文章失敗",
+      );
     } finally {
       setDeletingLesson(false);
       setDeleteTarget(null);
@@ -833,27 +1185,45 @@ export default function HomePage() {
     const load = async () => {
       try {
         const payload = await loadDashboard("all");
-        const storedStateRaw = window.sessionStorage.getItem(UI_STATE_STORAGE_KEY);
-        const storedState = storedStateRaw ? (JSON.parse(storedStateRaw) as Partial<StoredUiState>) : null;
+        const storedStateRaw =
+          window.sessionStorage.getItem(UI_STATE_STORAGE_KEY);
+        const storedState = storedStateRaw
+          ? (JSON.parse(storedStateRaw) as Partial<StoredUiState>)
+          : null;
         const restoredLessonId =
           typeof storedState?.selectedLessonId === "number" &&
-          payload.lessons.some((lesson) => lesson.id === storedState.selectedLessonId)
+          payload.lessons.some(
+            (lesson) => lesson.id === storedState.selectedLessonId,
+          )
             ? storedState.selectedLessonId
             : null;
 
-        if (storedState?.lessonFilter === "文章" || storedState?.lessonFilter === "歌詞") {
+        if (
+          storedState?.lessonFilter === "文章" ||
+          storedState?.lessonFilter === "歌詞"
+        ) {
           setLessonFilter(storedState.lessonFilter);
         }
 
-        if (storedState?.reviewMode === "all" || storedState?.reviewMode === "wrong") {
+        if (
+          storedState?.reviewMode === "all" ||
+          storedState?.reviewMode === "wrong"
+        ) {
           setReviewMode(storedState.reviewMode);
         }
 
-        if (storedState?.activeDetailTab === "sentences" || storedState?.activeDetailTab === "vocabulary" || storedState?.activeDetailTab === "grammar") {
+        if (
+          storedState?.activeDetailTab === "sentences" ||
+          storedState?.activeDetailTab === "vocabulary" ||
+          storedState?.activeDetailTab === "grammar"
+        ) {
           setActiveDetailTab(storedState.activeDetailTab);
         }
 
-        if (storedState?.vocabularyViewMode === "lesson" || storedState?.vocabularyViewMode === "bookmarked") {
+        if (
+          storedState?.vocabularyViewMode === "lesson" ||
+          storedState?.vocabularyViewMode === "bookmarked"
+        ) {
           setVocabularyViewMode(storedState.vocabularyViewMode);
         }
 
@@ -893,13 +1263,21 @@ export default function HomePage() {
 
         if (restoredLessonId) {
           await loadLesson(restoredLessonId);
-        } else if (storedState?.mobileTab === "bookmarks" || storedState?.activeTab === "bookmarks") {
+        } else if (
+          storedState?.mobileTab === "bookmarks" ||
+          storedState?.activeTab === "bookmarks"
+        ) {
           await openBookmarksPage("desktop");
-        } else if (storedState?.mobileTab === "wrongs" || storedState?.activeTab === "wrongs") {
+        } else if (
+          storedState?.mobileTab === "wrongs" ||
+          storedState?.activeTab === "wrongs"
+        ) {
           await openWrongsPage("desktop");
         }
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : "讀取資料失敗");
+        setError(
+          loadError instanceof Error ? loadError.message : "讀取資料失敗",
+        );
       } finally {
         setHydrating(false);
       }
@@ -921,10 +1299,13 @@ export default function HomePage() {
       mobileTab,
       reviewMode,
       selectedLessonId,
-      vocabularyViewMode
+      vocabularyViewMode,
     };
 
-    window.sessionStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(nextState));
+    window.sessionStorage.setItem(
+      UI_STATE_STORAGE_KEY,
+      JSON.stringify(nextState),
+    );
   }, [
     activeTab,
     activeDetailTab,
@@ -934,8 +1315,62 @@ export default function HomePage() {
     mobileTab,
     reviewMode,
     selectedLessonId,
-    vocabularyViewMode
+    vocabularyViewMode,
   ]);
+
+  useEffect(() => {
+    if (!generatingAi) {
+      setAiHintIndex(0);
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setAiHintIndex((index) => (index + 1) % AI_LOADING_HINTS.length);
+    }, 2200);
+
+    return () => window.clearInterval(timer);
+  }, [generatingAi]);
+
+  const handleGenerateAiAnalysis = async () => {
+    if (!sourceText.trim() && !aiImage) {
+      setError("請輸入日文內容，或上傳一張圖片再產生解析。");
+      return;
+    }
+
+    setGeneratingAi(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("category", category);
+      formData.append("rawText", sourceText.trim());
+      if (aiImage) {
+        formData.append("image", aiImage);
+      }
+
+      const { response, payload } = await requestJson<{
+        text: string;
+        model?: string;
+      }>("/api/ai/gemini", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok || !("text" in payload)) {
+        throw new Error("error" in payload ? payload.error : "AI 產生解析失敗");
+      }
+
+      setSourceText(payload.text);
+      setSuccess(
+        `已完成 AI 解析${payload.model ? `（${payload.model}）` : ""}，可直接檢查後送出。`,
+      );
+    } catch (aiError) {
+      setError(aiError instanceof Error ? aiError.message : "AI 產生解析失敗");
+    } finally {
+      setGeneratingAi(false);
+    }
+  };
 
   const handleImport = async () => {
     if (!sourceText.trim()) {
@@ -962,9 +1397,9 @@ export default function HomePage() {
       >("/api/import", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ sourceText, category })
+        body: JSON.stringify({ sourceText, category }),
       });
 
       if (!response.ok || !("data" in payload)) {
@@ -975,7 +1410,7 @@ export default function HomePage() {
       setSourceText("");
       setCategory("文章");
       setSuccess(
-        `已匯入《${payload.data.title}》${payload.data.category ? `（${payload.data.category}）` : ""}，新增 ${payload.data.sentenceCount} 句、${payload.data.vocabularyCount} 個單字、${payload.data.grammarCount} 筆文法。`
+        `已匯入《${payload.data.title}》${payload.data.category ? `（${payload.data.category}）` : ""}，新增 ${payload.data.sentenceCount} 句、${payload.data.vocabularyCount} 個單字、${payload.data.grammarCount} 筆文法。`,
       );
       await loadLesson(payload.data.lessonId);
     } catch (importError) {
@@ -1009,23 +1444,27 @@ export default function HomePage() {
       }>("/api/review", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           id: currentCard.id,
           kind: currentCard.kind,
           remembered: isCorrect,
-          mode: reviewMode
-        })
+          mode: reviewMode,
+        }),
       });
 
       if (!response.ok || !("cards" in payload) || !("stats" in payload)) {
-        throw new Error("error" in payload ? payload.error : "更新複習結果失敗");
+        throw new Error(
+          "error" in payload ? payload.error : "更新複習結果失敗",
+        );
       }
 
       syncCardsAndStats(payload.cards, payload.stats);
     } catch (reviewError) {
-      setError(reviewError instanceof Error ? reviewError.message : "更新複習結果失敗");
+      setError(
+        reviewError instanceof Error ? reviewError.message : "更新複習結果失敗",
+      );
     } finally {
       setReviewing(false);
     }
@@ -1035,12 +1474,19 @@ export default function HomePage() {
     if (activeDetailTab === "sentences") {
       return (
         <Stack spacing={2.5}>
-          {lesson.sentences.map((sentence) => (
-            <Box
+          {lesson.sentences.map((sentence) => {
+            const display = normalizeSentenceDisplayItem(sentence);
+            return (
+              <Box
               key={sentence.id}
               data-review-kind="sentence"
               data-review-id={sentence.id}
-              data-highlighted={highlightTarget?.kind === "sentence" && highlightTarget.id === sentence.id ? "true" : "false"}
+              data-highlighted={
+                highlightTarget?.kind === "sentence" &&
+                highlightTarget.id === sentence.id
+                  ? "true"
+                  : "false"
+              }
               sx={{
                 pb: 2,
                 px: 1.25,
@@ -1049,20 +1495,22 @@ export default function HomePage() {
                 borderBottom: "1px solid rgba(34, 38, 43, 0.06)",
                 scrollMarginTop: { xs: 84, lg: 32 },
                 backgroundColor:
-                  highlightTarget?.kind === "sentence" && highlightTarget.id === sentence.id
-                    ? "rgba(26, 138, 128, 0.14)"
+                  highlightTarget?.kind === "sentence" &&
+                  highlightTarget.id === sentence.id
+                    ? "rgba(79, 134, 247, 0.14)"
                     : "transparent",
-                transition: "background-color 260ms ease"
+                transition: "background-color 260ms ease",
               }}
             >
               <Typography sx={articleSentenceSx}>
-                {sentence.original}
+                {display.original}
               </Typography>
               <Typography sx={articleTranslationSx}>
-                {sentence.translationZh}
+                {display.translationZh}
               </Typography>
             </Box>
-          ))}
+            );
+          })}
         </Stack>
       );
     }
@@ -1078,8 +1526,10 @@ export default function HomePage() {
               exampleSentence: item.exampleSentence,
               exampleTranslation: item.exampleTranslation,
               bookmarked: item.bookmarked,
-              lessonTitle: item.lessonTitle
+              lessonTitle: item.lessonTitle,
             }))
+              .map(normalizeVocabularyDisplayItem)
+              .filter((item) => Boolean(item.word.trim()))
           : lesson.vocabulary.map((item) => ({
               id: item.id,
               word: item.word,
@@ -1088,13 +1538,17 @@ export default function HomePage() {
               exampleSentence: item.exampleSentence,
               exampleTranslation: item.exampleTranslation,
               bookmarked: item.bookmarked,
-              lessonTitle: lesson.title
-            }));
+              lessonTitle: lesson.title,
+            }))
+              .map(normalizeVocabularyDisplayItem)
+              .filter((item) => Boolean(item.word.trim()));
 
       if (items.length === 0) {
         return (
           <Typography color="text.secondary">
-            {vocabularyViewMode === "bookmarked" ? "目前還沒有標記任何單字。" : "這篇文章目前沒有解析到單字項目。"}
+            {vocabularyViewMode === "bookmarked"
+              ? "目前還沒有標記任何單字。"
+              : "這篇文章目前沒有解析到單字項目。"}
           </Typography>
         );
       }
@@ -1106,7 +1560,12 @@ export default function HomePage() {
               key={item.id}
               data-review-kind="vocabulary"
               data-review-id={item.id}
-              data-highlighted={highlightTarget?.kind === "vocabulary" && highlightTarget.id === item.id ? "true" : "false"}
+              data-highlighted={
+                highlightTarget?.kind === "vocabulary" &&
+                highlightTarget.id === item.id
+                  ? "true"
+                  : "false"
+              }
               sx={{
                 pb: 2,
                 px: 1.25,
@@ -1115,37 +1574,71 @@ export default function HomePage() {
                 borderBottom: "1px solid rgba(34, 38, 43, 0.06)",
                 scrollMarginTop: { xs: 84, lg: 32 },
                 backgroundColor:
-                  highlightTarget?.kind === "vocabulary" && highlightTarget.id === item.id
-                    ? "rgba(26, 138, 128, 0.14)"
+                  highlightTarget?.kind === "vocabulary" &&
+                  highlightTarget.id === item.id
+                    ? "rgba(79, 134, 247, 0.14)"
                     : "transparent",
-                transition: "background-color 260ms ease"
+                transition: "background-color 260ms ease",
               }}
             >
-              <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
-                <Typography sx={{ fontSize: 18, fontWeight: 700, lineHeight: 1.7, pr: 1 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                alignItems="flex-start"
+                justifyContent="space-between"
+              >
+                <Typography
+                  sx={{ fontSize: 16, fontWeight: 700, lineHeight: 1.7, pr: 1 }}
+                >
                   {item.word}
                   {item.reading ? `（${item.reading}）` : ""}
                 </Typography>
                 <IconButton
                   size="small"
-                  aria-label={item.bookmarked ? `取消標記 ${item.word}` : `標記 ${item.word}`}
-                  onClick={() => void handleToggleVocabularyBookmark(item.id, !item.bookmarked)}
+                  aria-label={
+                    item.bookmarked
+                      ? `取消標記 ${item.word}`
+                      : `標記 ${item.word}`
+                  }
+                  onClick={() =>
+                    void handleToggleVocabularyBookmark(
+                      item.id,
+                      !item.bookmarked,
+                    )
+                  }
                   disabled={savingTitle}
-                  sx={{ color: item.bookmarked ? "primary.main" : "text.secondary", mt: -0.25 }}
+                  sx={{
+                    color: item.bookmarked ? "primary.main" : "text.secondary",
+                    mt: -0.25,
+                  }}
                 >
-                  {item.bookmarked ? <BookmarkRoundedIcon fontSize="small" /> : <BookmarkBorderRoundedIcon fontSize="small" />}
+                  {item.bookmarked ? (
+                    <BookmarkRoundedIcon fontSize="small" />
+                  ) : (
+                    <BookmarkBorderRoundedIcon fontSize="small" />
+                  )}
                 </IconButton>
               </Stack>
-              <Typography sx={{ mt: 0.75, lineHeight: 1.8 }}>{item.meaningZh}</Typography>
+              <Typography sx={{ mt: 0.75, lineHeight: 1.8 }}>
+                {item.meaningZh}
+              </Typography>
               {vocabularyViewMode === "bookmarked" ? (
-                <Typography color="text.secondary" sx={{ mt: 0.75, lineHeight: 1.75 }}>
+                <Typography
+                  color="text.secondary"
+                  sx={{ mt: 0.75, lineHeight: 1.75 }}
+                >
                   來源：{item.lessonTitle}
                 </Typography>
               ) : null}
               {item.exampleSentence ? (
-                <Typography color="text.secondary" sx={{ mt: 1.25, lineHeight: 1.9 }}>
+                <Typography
+                  color="text.secondary"
+                  sx={{ mt: 1.25, lineHeight: 1.9 }}
+                >
                   例句：{item.exampleSentence}
-                  {item.exampleTranslation ? `｜${item.exampleTranslation}` : ""}
+                  {item.exampleTranslation
+                    ? `｜${item.exampleTranslation}`
+                    : ""}
                 </Typography>
               ) : null}
             </Box>
@@ -1155,15 +1648,24 @@ export default function HomePage() {
     }
 
     return lesson.grammar.length === 0 ? (
-      <Typography color="text.secondary">這篇文章目前沒有解析到文法項目。</Typography>
+      <Typography color="text.secondary">
+        這篇文章目前沒有解析到文法項目。
+      </Typography>
     ) : (
       <Stack spacing={2.5}>
-        {lesson.grammar.map((item) => (
-          <Box
+        {lesson.grammar.map((item) => {
+          const display = normalizeGrammarDisplayItem(item);
+          return (
+            <Box
             key={item.id}
             data-review-kind="grammar"
             data-review-id={item.id}
-            data-highlighted={highlightTarget?.kind === "grammar" && highlightTarget.id === item.id ? "true" : "false"}
+            data-highlighted={
+              highlightTarget?.kind === "grammar" &&
+              highlightTarget.id === item.id
+                ? "true"
+                : "false"
+            }
             sx={{
               pb: 2,
               px: 1.25,
@@ -1172,29 +1674,39 @@ export default function HomePage() {
               borderBottom: "1px solid rgba(34, 38, 43, 0.06)",
               scrollMarginTop: { xs: 84, lg: 32 },
               backgroundColor:
-                highlightTarget?.kind === "grammar" && highlightTarget.id === item.id
-                  ? "rgba(26, 138, 128, 0.14)"
+                highlightTarget?.kind === "grammar" &&
+                highlightTarget.id === item.id
+                  ? "rgba(79, 134, 247, 0.14)"
                   : "transparent",
-              transition: "background-color 260ms ease"
+              transition: "background-color 260ms ease",
             }}
           >
             <Typography sx={{ fontSize: 18, fontWeight: 700, lineHeight: 1.7 }}>
-              {item.pattern}
+              {display.pattern}
             </Typography>
-            <Typography sx={{ mt: 0.75, lineHeight: 1.8 }}>{item.meaningZh}</Typography>
-            {item.explanation ? (
-              <Typography color="text.secondary" sx={{ mt: 1, lineHeight: 1.85 }}>
-                說明：{item.explanation}
+            <Typography sx={{ mt: 0.75, lineHeight: 1.8 }}>
+              {display.meaningZh}
+            </Typography>
+            {display.explanation ? (
+              <Typography
+                color="text.secondary"
+                sx={{ mt: 1, lineHeight: 1.85 }}
+              >
+                說明：{display.explanation}
               </Typography>
             ) : null}
-            {item.exampleSentence ? (
-              <Typography color="text.secondary" sx={{ mt: 1, lineHeight: 1.9 }}>
-                例句：{item.exampleSentence}
-                {item.exampleTranslation ? `｜${item.exampleTranslation}` : ""}
+            {display.exampleSentence ? (
+              <Typography
+                color="text.secondary"
+                sx={{ mt: 1, lineHeight: 1.9 }}
+              >
+                例句：{display.exampleSentence}
+                {display.exampleTranslation ? `｜${display.exampleTranslation}` : ""}
               </Typography>
             ) : null}
           </Box>
-        ))}
+          );
+        })}
       </Stack>
     );
   };
@@ -1224,8 +1736,14 @@ export default function HomePage() {
                   py: compact ? 1 : 1.25,
                   alignItems: "flex-start",
                   backgroundColor: "#ffffff",
-                  border: lesson.id === selectedLessonId ? "1px solid rgba(26, 138, 128, 0.28)" : "1px solid transparent",
-                  boxShadow: lesson.id === selectedLessonId ? "0 4px 12px rgba(26, 138, 128, 0.08)" : "none"
+                  border:
+                    lesson.id === selectedLessonId
+                      ? "1px solid rgba(79, 134, 247, 0.28)"
+                      : "1px solid transparent",
+                  boxShadow:
+                    lesson.id === selectedLessonId
+                      ? "0 4px 12px rgba(79, 134, 247, 0.08)"
+                      : "none",
                 }}
               >
                 <ListItemText
@@ -1233,31 +1751,39 @@ export default function HomePage() {
                   secondary={`${lesson.category}｜${toTaipeiDateKey(lesson.createdAt)}`}
                   primaryTypographyProps={{
                     noWrap: true,
-                    fontWeight: lesson.id === selectedLessonId ? 700 : 600
+                    fontWeight: lesson.id === selectedLessonId ? 700 : 600,
                   }}
                   secondaryTypographyProps={{
                     noWrap: true,
                     sx: {
                       mt: 0.25,
-                      color: "text.secondary"
-                    }
+                      color: "text.secondary",
+                    },
                   }}
                 />
               </ListItemButton>
               <IconButton
-                color="error"
                 aria-label={`刪除 ${lesson.title}`}
                 onClick={(event) => {
                   event.stopPropagation();
-                  setDeleteTarget({ mode: "single", id: lesson.id, title: lesson.title });
+                  setDeleteTarget({
+                    mode: "single",
+                    id: lesson.id,
+                    title: lesson.title,
+                  });
                 }}
                 disabled={deletingLesson}
-                sx={{ mt: compact ? 0.25 : 0 }}
+                sx={{
+                  mt: compact ? 0.25 : 0,
+                  color: "#df5353",
+                }}
               >
                 <DeleteOutlineRoundedIcon />
               </IconButton>
             </Stack>
-            {index < filteredLessons.length - 1 ? <Divider sx={{ my: compact ? 1 : 1.25 }} /> : null}
+            {index < filteredLessons.length - 1 ? (
+              <Divider sx={{ my: compact ? 1 : 1.25 }} />
+            ) : null}
           </Box>
         ))}
       </List>
@@ -1266,40 +1792,73 @@ export default function HomePage() {
 
   const renderBookmarkedVocabularyContent = () => {
     if (bookmarkedVocabulary.length === 0) {
-      return <Typography color="text.secondary">目前還沒有標記任何單字。</Typography>;
+      return (
+        <Typography color="text.secondary">目前還沒有標記任何單字。</Typography>
+      );
     }
 
     return (
       <Stack spacing={2.5}>
-        {bookmarkedVocabulary.map((item) => (
+        {bookmarkedVocabulary
+          .map((item) =>
+            normalizeVocabularyDisplayItem({
+              id: item.id,
+              word: item.word,
+              reading: item.reading,
+              meaningZh: item.meaningZh,
+              exampleSentence: item.exampleSentence,
+              exampleTranslation: item.exampleTranslation,
+              bookmarked: item.bookmarked,
+              lessonTitle: item.lessonTitle,
+            }),
+          )
+          .filter((item) => Boolean(item.word.trim()))
+          .map((item) => (
           <Box
             key={item.id}
             sx={{
               pb: 2,
-              borderBottom: "1px solid rgba(34, 38, 43, 0.06)"
+              borderBottom: "1px solid rgba(34, 38, 43, 0.06)",
             }}
           >
-            <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
-              <Typography sx={{ fontSize: 18, fontWeight: 700, lineHeight: 1.7, pr: 1 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              alignItems="flex-start"
+              justifyContent="space-between"
+            >
+              <Typography
+                sx={{ fontSize: 16, fontWeight: 700, lineHeight: 1.7, pr: 1 }}
+              >
                 {item.word}
                 {item.reading ? `（${item.reading}）` : ""}
               </Typography>
               <IconButton
                 size="small"
                 aria-label={`取消標記 ${item.word}`}
-                onClick={() => void handleToggleVocabularyBookmark(item.id, false)}
+                onClick={() =>
+                  void handleToggleVocabularyBookmark(item.id, false)
+                }
                 disabled={savingTitle}
                 sx={{ color: "primary.main", mt: -0.25 }}
               >
                 <BookmarkRoundedIcon fontSize="small" />
               </IconButton>
             </Stack>
-            <Typography sx={{ mt: 0.75, lineHeight: 1.8 }}>{item.meaningZh}</Typography>
-            <Typography color="text.secondary" sx={{ mt: 0.75, lineHeight: 1.75 }}>
+            <Typography sx={{ mt: 0.75, lineHeight: 1.8 }}>
+              {item.meaningZh}
+            </Typography>
+            <Typography
+              color="text.secondary"
+              sx={{ mt: 0.75, lineHeight: 1.75 }}
+            >
               來源：{item.lessonTitle}
             </Typography>
             {item.exampleSentence ? (
-              <Typography color="text.secondary" sx={{ mt: 1.25, lineHeight: 1.9 }}>
+              <Typography
+                color="text.secondary"
+                sx={{ mt: 1.25, lineHeight: 1.9 }}
+              >
                 例句：{item.exampleSentence}
                 {item.exampleTranslation ? `｜${item.exampleTranslation}` : ""}
               </Typography>
@@ -1322,13 +1881,25 @@ export default function HomePage() {
             key={`${item.kind}-${item.id}`}
             sx={{
               pb: 2,
-              borderBottom: "1px solid rgba(34, 38, 43, 0.06)"
+              borderBottom: "1px solid rgba(34, 38, 43, 0.06)",
             }}
           >
-            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
+            <Stack
+              direction="row"
+              spacing={1}
+              useFlexGap
+              flexWrap="wrap"
+              alignItems="center"
+            >
               <Chip
                 size="small"
-                label={item.kind === "sentence" ? "句子" : item.kind === "vocabulary" ? "單字" : "文法"}
+                label={
+                  item.kind === "sentence"
+                    ? "句子"
+                    : item.kind === "vocabulary"
+                      ? "單字"
+                      : "文法"
+                }
                 color="secondary"
               />
               <Chip
@@ -1339,28 +1910,40 @@ export default function HomePage() {
                 onClick={() => void openReviewCardSource(item)}
               />
             </Stack>
-            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 1 }}>
-              <Typography sx={{ fontSize: 18, fontWeight: 700, lineHeight: 1.7, flex: 1 }}>
+            <Stack
+              direction="row"
+              spacing={0.5}
+              alignItems="center"
+              sx={{ mt: 1 }}
+            >
+              <Typography
+                sx={{ fontSize: 18, fontWeight: 700, lineHeight: 1.7, flex: 1 }}
+              >
                 {item.prompt}
               </Typography>
               {item.kind === "vocabulary" ? (
                 <IconButton
                   size="small"
-                  color="error"
                   aria-label={`從答錯內容移除 ${item.prompt}`}
                   onClick={() => void handleMasterVocabulary(item)}
                   disabled={reviewing}
-                  sx={{ mt: -0.25 }}
+                  sx={{ mt: -0.25, color: "#df5353" }}
                 >
                   <DeleteOutlineRoundedIcon fontSize="small" />
                 </IconButton>
               ) : null}
             </Stack>
-            <Typography color="text.secondary" sx={{ mt: 0.75, lineHeight: 1.8 }}>
+            <Typography
+              color="text.secondary"
+              sx={{ mt: 0.75, lineHeight: 1.8 }}
+            >
               正解：{item.answer}
             </Typography>
             {item.hint ? (
-              <Typography color="text.secondary" sx={{ mt: 0.75, lineHeight: 1.75 }}>
+              <Typography
+                color="text.secondary"
+                sx={{ mt: 0.75, lineHeight: 1.75 }}
+              >
                 {item.hint}
               </Typography>
             ) : null}
@@ -1376,11 +1959,15 @@ export default function HomePage() {
     }
 
     if (!currentCard) {
-      return <Alert severity="info">先匯入有中文意思的單字，這裡就會開始隨機出題。</Alert>;
+      return (
+        <Alert severity="info">
+          先匯入有中文意思的單字，這裡就會開始隨機出題。
+        </Alert>
+      );
     }
 
     return (
-        <Stack spacing={compact ? 2 : 2.5}>
+      <Stack spacing={compact ? 2 : 2.5}>
         <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
           <Chip
             label={currentCard.lessonTitle}
@@ -1390,7 +1977,10 @@ export default function HomePage() {
           />
         </Stack>
 
-        <Typography variant={compact ? "h6" : "h5"} sx={{ fontWeight: 700, lineHeight: 1.5 }}>
+        <Typography
+          variant={compact ? "h6" : "h5"}
+          sx={{ fontWeight: 700, lineHeight: 1.5 }}
+        >
           {currentCard.prompt}
         </Typography>
         {currentCard.hint ? (
@@ -1424,11 +2014,11 @@ export default function HomePage() {
                   py: 1.35,
                   backgroundColor:
                     answered && choice === currentCard.answer
-                      ? "rgba(26, 138, 128, 0.08)"
+                      ? "rgba(79, 134, 247, 0.08)"
                       : answered && chosen && choice !== currentCard.answer
                         ? "rgba(211, 47, 47, 0.08)"
                         : chosen
-                          ? "rgba(26, 138, 128, 0.06)"
+                          ? "rgba(79, 134, 247, 0.06)"
                           : "#ffffff",
                   borderColor:
                     answered && choice === currentCard.answer
@@ -1437,7 +2027,7 @@ export default function HomePage() {
                         ? "error.main"
                         : chosen
                           ? "primary.main"
-                          : undefined
+                          : undefined,
                 }}
               >
                 {choice}
@@ -1456,7 +2046,13 @@ export default function HomePage() {
           variant="contained"
           onClick={() => void handleReview()}
           disabled={!answered || reviewing}
-          startIcon={reviewing ? <CircularProgress size={18} color="inherit" /> : <AutoStoriesRoundedIcon />}
+          startIcon={
+            reviewing ? (
+              <CircularProgress size={18} color="inherit" />
+            ) : (
+              <AutoStoriesRoundedIcon />
+            )
+          }
           sx={reviewActionButtonSx}
         >
           {reviewing ? "更新中" : "下一題"}
@@ -1479,6 +2075,20 @@ export default function HomePage() {
     );
   };
 
+  const handleCloseErrorSnackbar = (_event?: unknown, reason?: string) => {
+    if (reason === "clickaway") {
+      return;
+    }
+    setError(null);
+  };
+
+  const handleCloseSuccessSnackbar = (_event?: unknown, reason?: string) => {
+    if (reason === "clickaway") {
+      return;
+    }
+    setSuccess(null);
+  };
+
   return (
     <Container
       maxWidth="xl"
@@ -1486,19 +2096,24 @@ export default function HomePage() {
         pt: { xs: 0, lg: 6 },
         pb: { xs: 2, lg: 6 },
         px: { xs: 2, sm: 3 },
-        minHeight: { xs: "100dvh", lg: "auto" }
+        minHeight: { xs: "100dvh", lg: "auto" },
       }}
     >
       <Stack spacing={4}>
-        {error ? <Alert severity="error">{error}</Alert> : null}
-        {success ? <Alert severity="success">{success}</Alert> : null}
-
-        <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.08)", display: { xs: "none", lg: "block" } }}>
+        <Card
+          elevation={0}
+          sx={{
+            border: "1px solid rgba(31,29,26,0.08)",
+            display: { xs: "none", lg: "block" },
+          }}
+        >
           <CardContent sx={{ p: 3 }}>
             <Stack spacing={3}>
               <Select
                 value={category}
-                onChange={(event) => setCategory(event.target.value as LessonCategory)}
+                onChange={(event) =>
+                  setCategory(event.target.value as LessonCategory)
+                }
                 fullWidth
               >
                 <MenuItem value="文章">文章</MenuItem>
@@ -1511,45 +2126,103 @@ export default function HomePage() {
                 label="貼上文章內容"
                 value={sourceText}
                 onChange={(event) => setSourceText(event.target.value)}
-                sx={{
-                  "& .MuiInputBase-inputMultiline": {
-                    overflowY: "auto",
-                    resize: "none"
-                  }
-                }}
+                sx={importSourceTextFieldSx}
               />
+
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                spacing={1.5}
+                alignItems={{ xs: "stretch", sm: "center" }}
+              >
+                <Button
+                  variant="outlined"
+                  component="label"
+                  disabled={generatingAi || saving}
+                  sx={importActionButtonSx}
+                >
+                  {aiImage ? "更換圖片" : "選擇圖片"}
+                  <input
+                    hidden
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) =>
+                      setAiImage(event.target.files?.[0] ?? null)
+                    }
+                  />
+                </Button>
+                {aiImage ? (
+                  <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+                    已選擇：{aiImage.name}
+                  </Typography>
+                ) : null}
+              </Stack>
+
+              <Button
+                variant="outlined"
+                size="large"
+                onClick={() => void handleGenerateAiAnalysis()}
+                disabled={generatingAi || saving}
+                sx={importActionButtonSx}
+              >
+                {generatingAi ? AI_LOADING_HINTS[aiHintIndex] : "AI 產生解析"}
+              </Button>
 
               <Button
                 variant="contained"
                 size="large"
                 onClick={handleImport}
-                disabled={saving}
-                sx={{ alignSelf: "flex-start" }}
+                disabled={saving || generatingAi}
+                sx={importActionButtonSx}
               >
-                  {saving ? "送出中" : "送出"}
-                </Button>
+                {saving ? "送出中" : "送出"}
+              </Button>
             </Stack>
           </CardContent>
         </Card>
 
-        <Box sx={{ display: { xs: "block", lg: "none" }, pb: "calc(88px + env(safe-area-inset-bottom))", mt: -1 }}>
+        <Box
+          sx={{
+            display: { xs: "block", lg: "none" },
+            pb: "calc(88px + env(safe-area-inset-bottom))",
+            mt: -1,
+          }}
+        >
           <Stack spacing={2}>
             {mobileTab === "home" ? (
               <Stack spacing={2}>
-                <Card
-                  elevation={0}
-                  sx={mobileCardSx}
-                >
+                <Card elevation={0} sx={mobileCardSx}>
                   <CardContent sx={{ p: 2.25 }}>
                     <Stack spacing={2}>
-                      <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                      <Stack
+                        direction="row"
+                        justifyContent="space-between"
+                        alignItems="flex-start"
+                      >
                         <Box>
-                          <Typography sx={{ fontSize: 18, fontWeight: 800, lineHeight: 1.25 }}>學習</Typography>
-                          <Typography color="text.secondary" sx={{ mt: 0.5, fontSize: 14 }}>
+                          <Typography
+                            sx={{
+                              fontSize: 18,
+                              fontWeight: 800,
+                              lineHeight: 1.25,
+                            }}
+                          >
+                            學習
+                          </Typography>
+                          <Typography
+                            color="text.secondary"
+                            sx={{ mt: 0.5, fontSize: 14 }}
+                          >
                             今天的進度檢查
                           </Typography>
                         </Box>
-                        <Typography sx={{ fontSize: 18, fontWeight: 800, color: "primary.main", letterSpacing: "-0.01em" }}>
+                        <Typography
+                          sx={{
+                            fontSize: 18,
+                            fontWeight: 800,
+                            color: "primary.main",
+                            letterSpacing: "-0.01em",
+                          }}
+                        >
                           {stats.dueTotal}/{stats.vocabularyTotal || 0}
                         </Typography>
                       </Stack>
@@ -1558,20 +2231,23 @@ export default function HomePage() {
                         sx={{
                           height: 6,
                           borderRadius: 999,
-                          backgroundColor: "rgba(26, 138, 128, 0.10)",
-                          overflow: "hidden"
+                          backgroundColor: "rgba(79, 134, 247, 0.10)",
+                          overflow: "hidden",
                         }}
                       >
                         <Box
                           sx={{
                             width: `${stats.vocabularyTotal ? Math.min(100, (stats.dueTotal / stats.vocabularyTotal) * 100) : 0}%`,
                             height: "100%",
-                            backgroundColor: "primary.main"
+                            backgroundColor: "primary.main",
                           }}
                         />
                       </Box>
 
-                      <Typography color="text.secondary" sx={{ textAlign: "right", fontSize: 13, mt: -0.75 }}>
+                      <Typography
+                        color="text.secondary"
+                        sx={{ textAlign: "right", fontSize: 13, mt: -0.75 }}
+                      >
                         {`${stats.vocabularyTotal ? Math.min(100, Math.round((stats.dueTotal / stats.vocabularyTotal) * 100)) : 0}%`}
                       </Typography>
 
@@ -1608,7 +2284,7 @@ export default function HomePage() {
                       flex: 1,
                       ...mobileCardSx,
                       borderRadius: "20px",
-                      cursor: "pointer"
+                      cursor: "pointer",
                     }}
                     onClick={() => {
                       setLessonFilter("文章");
@@ -1624,15 +2300,22 @@ export default function HomePage() {
                             borderRadius: "12px",
                             display: "grid",
                             placeItems: "center",
-                            color: "primary.main"
+                            color: "primary.main",
                           }}
                         >
                           <DescriptionOutlinedIcon fontSize="small" />
                         </Box>
                         <Typography sx={{ fontWeight: 700 }}>文章</Typography>
                       </Stack>
-                      <Typography color="text.secondary" sx={{ mt: 1, fontSize: 15 }}>
-                        {lessons.filter((lesson) => lesson.category === "文章").length} 篇
+                      <Typography
+                        color="text.secondary"
+                        sx={{ mt: 1, fontSize: 15 }}
+                      >
+                        {
+                          lessons.filter((lesson) => lesson.category === "文章")
+                            .length
+                        }{" "}
+                        篇
                       </Typography>
                     </CardContent>
                   </Card>
@@ -1642,7 +2325,7 @@ export default function HomePage() {
                       flex: 1,
                       ...mobileCardSx,
                       borderRadius: "20px",
-                      cursor: "pointer"
+                      cursor: "pointer",
                     }}
                     onClick={() => {
                       setLessonFilter("歌詞");
@@ -1658,15 +2341,22 @@ export default function HomePage() {
                             borderRadius: "12px",
                             display: "grid",
                             placeItems: "center",
-                            color: "primary.main"
+                            color: "primary.main",
                           }}
                         >
                           <MusicNoteOutlinedIcon fontSize="small" />
                         </Box>
                         <Typography sx={{ fontWeight: 700 }}>歌詞</Typography>
                       </Stack>
-                      <Typography color="text.secondary" sx={{ mt: 1, fontSize: 15 }}>
-                        {lessons.filter((lesson) => lesson.category === "歌詞").length} 篇
+                      <Typography
+                        color="text.secondary"
+                        sx={{ mt: 1, fontSize: 15 }}
+                      >
+                        {
+                          lessons.filter((lesson) => lesson.category === "歌詞")
+                            .length
+                        }{" "}
+                        篇
                       </Typography>
                     </CardContent>
                   </Card>
@@ -1677,7 +2367,7 @@ export default function HomePage() {
                   sx={{
                     ...mobileCardSx,
                     borderRadius: "20px",
-                    cursor: "pointer"
+                    cursor: "pointer",
                   }}
                   onClick={() => {
                     void openBookmarksPage("mobile");
@@ -1692,14 +2382,17 @@ export default function HomePage() {
                           borderRadius: "12px",
                           display: "grid",
                           placeItems: "center",
-                          color: "primary.main"
+                          color: "primary.main",
                         }}
                       >
                         <BookmarkBorderRoundedIcon fontSize="small" />
                       </Box>
                       <Typography sx={{ fontWeight: 700 }}>標記單字</Typography>
                     </Stack>
-                    <Typography color="text.secondary" sx={{ mt: 1, fontSize: 15 }}>
+                    <Typography
+                      color="text.secondary"
+                      sx={{ mt: 1, fontSize: 15 }}
+                    >
                       {stats.bookmarkedTotal} 個
                     </Typography>
                   </CardContent>
@@ -1710,7 +2403,7 @@ export default function HomePage() {
                   sx={{
                     ...mobileCardSx,
                     borderRadius: "20px",
-                    cursor: "pointer"
+                    cursor: "pointer",
                   }}
                   onClick={() => {
                     void openWrongsPage("mobile");
@@ -1726,12 +2419,14 @@ export default function HomePage() {
                           backgroundColor: "rgba(223, 83, 83, 0.08)",
                           display: "grid",
                           placeItems: "center",
-                          color: "#df5353"
+                          color: "#df5353",
                         }}
                       >
                         <ReplayRoundedIcon fontSize="small" />
                       </Box>
-                      <Typography sx={{ fontWeight: 700 }}>答錯的內容</Typography>
+                      <Typography sx={{ fontWeight: 700 }}>
+                        答錯的內容
+                      </Typography>
                     </Stack>
                     {wrongPreviewCards.length > 0 ? (
                       <Stack spacing={0.75} sx={{ mt: 1 }}>
@@ -1745,7 +2440,7 @@ export default function HomePage() {
                               display: "-webkit-box",
                               WebkitLineClamp: 2,
                               WebkitBoxOrient: "vertical",
-                              overflow: "hidden"
+                              overflow: "hidden",
                             }}
                           >
                             {card.prompt}
@@ -1753,20 +2448,22 @@ export default function HomePage() {
                         ))}
                       </Stack>
                     ) : (
-                      <Typography color="text.secondary" sx={{ mt: 1, fontSize: 15 }}>
+                      <Typography
+                        color="text.secondary"
+                        sx={{ mt: 1, fontSize: 15 }}
+                      >
                         目前沒有答錯內容
                       </Typography>
                     )}
                   </CardContent>
                 </Card>
 
-                <Card
-                  elevation={0}
-                  sx={mobileCardSx}
-                >
+                <Card elevation={0} sx={mobileCardSx}>
                   <CardContent sx={{ p: 2.25 }}>
                     <Stack spacing={1.5}>
-                      <Typography sx={{ fontWeight: 800, fontSize: 18 }}>最近教材</Typography>
+                      <Typography sx={{ fontWeight: 800, fontSize: 18 }}>
+                        最近教材
+                      </Typography>
                       {renderLessonList(true)}
                     </Stack>
                   </CardContent>
@@ -1775,38 +2472,86 @@ export default function HomePage() {
             ) : null}
 
             {mobileTab === "import" ? (
-              <Card elevation={0} sx={mobileCardSx}>
-                <CardContent sx={{ p: 2.5 }}>
-                  <Stack spacing={2.5}>
+              <Card
+                elevation={0}
+                sx={{
+                  ...mobileCardSx,
+                  minHeight: "calc(100dvh - 132px - env(safe-area-inset-bottom))",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <CardContent
+                  sx={{
+                    p: 2.5,
+                    flex: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                  }}
+                >
+                  <Stack spacing={2.5} sx={{ flex: 1, minHeight: 0 }}>
                     <Select
                       value={category}
-                      onChange={(event) => setCategory(event.target.value as LessonCategory)}
+                      onChange={(event) =>
+                        setCategory(event.target.value as LessonCategory)
+                      }
                       fullWidth
                     >
                       <MenuItem value="文章">文章</MenuItem>
                       <MenuItem value="歌詞">歌詞</MenuItem>
                     </Select>
 
-                    <TextField
-                      multiline
-                      rows={12}
-                      label="貼上文章內容"
-                      value={sourceText}
-                      onChange={(event) => setSourceText(event.target.value)}
-                      sx={{
-                        "& .MuiInputBase-inputMultiline": {
-                          overflowY: "auto",
-                          resize: "none"
+                    <Box sx={{ flex: 1, minHeight: 0, display: "flex" }}>
+                      <TextField
+                        multiline
+                        label="貼上文章內容"
+                        value={sourceText}
+                        onChange={(event) => setSourceText(event.target.value)}
+                        sx={{ ...importSourceTextFieldSx, flex: 1 }}
+                      />
+                    </Box>
+
+                    <Button
+                      variant="outlined"
+                      component="label"
+                      disabled={generatingAi || saving}
+                      sx={importActionButtonSx}
+                    >
+                      {aiImage ? "更換圖片" : "選擇圖片"}
+                      <input
+                        hidden
+                        type="file"
+                        accept="image/*"
+                        onChange={(event) =>
+                          setAiImage(event.target.files?.[0] ?? null)
                         }
-                      }}
-                    />
+                      />
+                    </Button>
+                    {aiImage ? (
+                      <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+                        已選擇：{aiImage.name}
+                      </Typography>
+                    ) : null}
+
+                    <Button
+                      variant="outlined"
+                      size="large"
+                      onClick={() => void handleGenerateAiAnalysis()}
+                      disabled={generatingAi || saving}
+                      sx={importActionButtonSx}
+                    >
+                      {generatingAi
+                        ? AI_LOADING_HINTS[aiHintIndex]
+                        : "AI 產生解析"}
+                    </Button>
 
                     <Button
                       variant="contained"
                       size="large"
                       onClick={handleImport}
-                      disabled={saving}
-                      sx={{ py: 1.2 }}
+                      disabled={saving || generatingAi}
+                      sx={importActionButtonSx}
                     >
                       {saving ? "送出中" : "送出"}
                     </Button>
@@ -1818,7 +2563,12 @@ export default function HomePage() {
             {mobileTab === "library" ? (
               <Card elevation={0} sx={mobileCardSx}>
                 <CardContent sx={{ p: 2.25 }}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                    sx={{ mb: 1.5 }}
+                  >
                     <Typography variant="h6" sx={{ fontWeight: 700 }}>
                       教材列表
                     </Typography>
@@ -1827,7 +2577,12 @@ export default function HomePage() {
                         size="small"
                         color="error"
                         variant="outlined"
-                        onClick={() => setDeleteTarget({ mode: "all", count: lessons.length })}
+                        onClick={() =>
+                          setDeleteTarget({
+                            mode: "all",
+                            count: lessons.length,
+                          })
+                        }
                         disabled={deletingLesson}
                       >
                         全部刪除
@@ -1857,7 +2612,12 @@ export default function HomePage() {
                     <CardContent sx={{ p: 2.25 }}>
                       <Stack spacing={2}>
                         <Box>
-                          <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            alignItems="flex-start"
+                            justifyContent="space-between"
+                          >
                             <Typography
                               variant="h5"
                               sx={{
@@ -1866,7 +2626,7 @@ export default function HomePage() {
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
                                 minWidth: 0,
-                                flex: 1
+                                flex: 1,
                               }}
                             >
                               {selectedLesson.title}
@@ -1874,12 +2634,14 @@ export default function HomePage() {
                             <Stack direction="row" spacing={0.5}>
                               <IconButton
                                 size="small"
-                                onClick={() => setIsEditingLesson((value) => !value)}
+                                onClick={() =>
+                                  setIsEditingLesson((value) => !value)
+                                }
                                 sx={{
                                   color: "primary.main",
                                   "&:hover": {
-                                    backgroundColor: "rgba(26, 138, 128, 0.08)"
-                                  }
+                                    backgroundColor: "rgba(79, 134, 247, 0.08)",
+                                  },
                                 }}
                               >
                                 <EditRoundedIcon fontSize="small" />
@@ -1890,29 +2652,43 @@ export default function HomePage() {
                                   setDeleteTarget({
                                     mode: "single",
                                     id: selectedLesson.id,
-                                    title: selectedLesson.title
+                                    title: selectedLesson.title,
                                   })
                                 }
                                 disabled={deletingLesson}
                                 sx={{
-                                  color: "#b3261e",
+                                  color: "#df5353",
                                   "&:hover": {
-                                    backgroundColor: "rgba(179, 38, 30, 0.08)"
-                                  }
+                                    backgroundColor: "rgba(223, 83, 83, 0.12)",
+                                  },
                                 }}
                               >
                                 <DeleteOutlineRoundedIcon fontSize="small" />
                               </IconButton>
                             </Stack>
                           </Stack>
-                          <Chip label={selectedLesson.category} variant="outlined" sx={{ mt: 1 }} />
+                          <Chip
+                            label={selectedLesson.category}
+                            variant="outlined"
+                            sx={{ mt: 1 }}
+                          />
                           <Typography color="text.secondary" sx={{ mt: 1 }}>
-                            匯入時間：{new Date(selectedLesson.createdAt).toLocaleString("zh-TW")}
+                            匯入時間：
+                            {new Date(selectedLesson.createdAt).toLocaleString(
+                              "zh-TW",
+                            )}
                           </Typography>
                         </Box>
 
                         {isEditingLesson ? (
-                          <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.06)", borderRadius: "18px", boxShadow: "none" }}>
+                          <Card
+                            elevation={0}
+                            sx={{
+                              border: "1px solid rgba(31,29,26,0.06)",
+                              borderRadius: "18px",
+                              boxShadow: "none",
+                            }}
+                          >
                             <CardContent sx={{ pt: 0 }}>
                               <Stack spacing={2}>
                                 <TextField
@@ -1920,12 +2696,18 @@ export default function HomePage() {
                                   size="small"
                                   label="文章標題"
                                   value={editingTitle}
-                                  onChange={(event) => setEditingTitle(event.target.value)}
+                                  onChange={(event) =>
+                                    setEditingTitle(event.target.value)
+                                  }
                                 />
                                 <Select
                                   size="small"
                                   value={editingCategory}
-                                  onChange={(event) => setEditingCategory(event.target.value as LessonCategory)}
+                                  onChange={(event) =>
+                                    setEditingCategory(
+                                      event.target.value as LessonCategory,
+                                    )
+                                  }
                                   sx={{ width: "100%" }}
                                 >
                                   <MenuItem value="文章">文章</MenuItem>
@@ -1936,17 +2718,28 @@ export default function HomePage() {
                                   rows={12}
                                   label="編輯文章原始內容"
                                   value={editingLessonText}
-                                  onChange={(event) => setEditingLessonText(event.target.value)}
+                                  onChange={(event) =>
+                                    setEditingLessonText(event.target.value)
+                                  }
                                   sx={{
                                     "& .MuiInputBase-inputMultiline": {
                                       overflowY: "auto",
-                                      resize: "none"
-                                    }
+                                      resize: "none",
+                                    },
                                   }}
                                 />
                                 <Button
                                   variant="contained"
-                                  startIcon={savingLesson ? <CircularProgress size={18} color="inherit" /> : <SaveRoundedIcon />}
+                                  startIcon={
+                                    savingLesson ? (
+                                      <CircularProgress
+                                        size={18}
+                                        color="inherit"
+                                      />
+                                    ) : (
+                                      <SaveRoundedIcon />
+                                    )
+                                  }
                                   onClick={() => void handleUpdateLesson()}
                                   disabled={savingLesson}
                                   sx={{ alignSelf: "flex-start" }}
@@ -1958,7 +2751,14 @@ export default function HomePage() {
                           </Card>
                         ) : null}
 
-                        <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.06)", borderRadius: "18px", boxShadow: "none" }}>
+                        <Card
+                          elevation={0}
+                          sx={{
+                            border: "1px solid rgba(31,29,26,0.06)",
+                            borderRadius: "18px",
+                            boxShadow: "none",
+                          }}
+                        >
                           <CardContent sx={{ p: 1.25 }}>
                             <Tabs
                               value={activeDetailTab}
@@ -1970,21 +2770,46 @@ export default function HomePage() {
                               }}
                               variant="fullWidth"
                             >
-                              <Tab label={renderCountTabLabel("句子", selectedLesson.sentences.length)} value="sentences" />
                               <Tab
                                 label={renderCountTabLabel(
-                                  vocabularyViewMode === "bookmarked" ? "標記單字" : "單字",
-                                  vocabularyViewMode === "bookmarked" ? bookmarkedVocabulary.length : selectedLesson.vocabulary.length
+                                  "句子",
+                                  selectedLesson.sentences.length,
+                                )}
+                                value="sentences"
+                              />
+                              <Tab
+                                label={renderCountTabLabel(
+                                  vocabularyViewMode === "bookmarked"
+                                    ? "標記單字"
+                                    : "單字",
+                                  vocabularyViewMode === "bookmarked"
+                                    ? bookmarkedVocabulary.length
+                                    : selectedLesson.vocabulary.length,
                                 )}
                                 value="vocabulary"
                               />
-                              <Tab label={renderCountTabLabel("文法", selectedLesson.grammar.length)} value="grammar" />
+                              <Tab
+                                label={renderCountTabLabel(
+                                  "文法",
+                                  selectedLesson.grammar.length,
+                                )}
+                                value="grammar"
+                              />
                             </Tabs>
                           </CardContent>
                         </Card>
 
-                        <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.06)", borderRadius: "18px", boxShadow: "none" }}>
-                          <CardContent sx={{ p: 2.25 }}>{renderDetailContent(selectedLesson)}</CardContent>
+                        <Card
+                          elevation={0}
+                          sx={{
+                            border: "1px solid rgba(31,29,26,0.06)",
+                            borderRadius: "18px",
+                            boxShadow: "none",
+                          }}
+                        >
+                          <CardContent sx={{ p: 2.25 }}>
+                            {renderDetailContent(selectedLesson)}
+                          </CardContent>
                         </Card>
                       </Stack>
                     </CardContent>
@@ -1996,12 +2821,21 @@ export default function HomePage() {
                       borderRadius: "999px",
                       color: "text.secondary",
                       px: 0.25,
-                      py: 0.25
+                      py: 0.25,
                     }}
                   >
                     <Stack direction="row" alignItems="center" spacing={0.5}>
                       <ArrowBackRoundedIcon sx={{ fontSize: 18 }} />
-                      <Typography sx={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.01em", lineHeight: 1.2 }}>返回</Typography>
+                      <Typography
+                        sx={{
+                          fontSize: 13,
+                          fontWeight: 700,
+                          letterSpacing: "0.01em",
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        返回
+                      </Typography>
                     </Stack>
                   </ButtonBase>
                 </Stack>
@@ -2022,9 +2856,16 @@ export default function HomePage() {
               <Card elevation={0} sx={mobileCardSx}>
                 <CardContent sx={{ p: 2.25 }}>
                   <Stack spacing={2.25}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Stack
+                      direction="row"
+                      justifyContent="space-between"
+                      alignItems="center"
+                    >
                       <Typography variant="h5">標記單字</Typography>
-                      <Chip label={`${bookmarkedVocabulary.length} 個`} variant="outlined" />
+                      <Chip
+                        label={`${bookmarkedVocabulary.length} 個`}
+                        variant="outlined"
+                      />
                     </Stack>
                     {renderBookmarkedVocabularyContent()}
                   </Stack>
@@ -2037,9 +2878,16 @@ export default function HomePage() {
                 <Card elevation={0} sx={mobileCardSx}>
                   <CardContent sx={{ p: 2.25 }}>
                     <Stack spacing={2.25}>
-                      <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Stack
+                        direction="row"
+                        justifyContent="space-between"
+                        alignItems="center"
+                      >
                         <Typography variant="h5">答錯的內容</Typography>
-                        <Chip label={`${wrongCards.length} 筆`} variant="outlined" />
+                        <Chip
+                          label={`${wrongCards.length} 筆`}
+                          variant="outlined"
+                        />
                       </Stack>
                       {renderWrongCardsContent()}
                     </Stack>
@@ -2052,12 +2900,21 @@ export default function HomePage() {
                     borderRadius: "999px",
                     color: "text.secondary",
                     px: 0.25,
-                    py: 0.25
+                    py: 0.25,
                   }}
                 >
                   <Stack direction="row" alignItems="center" spacing={0.5}>
                     <ArrowBackRoundedIcon sx={{ fontSize: 18 }} />
-                    <Typography sx={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.01em", lineHeight: 1.2 }}>返回</Typography>
+                    <Typography
+                      sx={{
+                        fontSize: 13,
+                        fontWeight: 700,
+                        letterSpacing: "0.01em",
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      返回
+                    </Typography>
                   </Stack>
                 </ButtonBase>
               </Stack>
@@ -2076,19 +2933,19 @@ export default function HomePage() {
               border: "1px solid rgba(31,29,26,0.08)",
               boxShadow: "0 -10px 24px rgba(34, 38, 43, 0.06)",
               backgroundColor: "rgba(255,255,255,0.98)",
-              backdropFilter: "blur(12px)"
+              backdropFilter: "blur(12px)",
             }}
           >
-                <Tabs
-                  value={mobileTab === "detail" ? "library" : mobileTab}
-                  onChange={(_event, value) => {
-                    if (value === "bookmarks") {
-                      void openBookmarksPage("mobile");
-                      return;
-                    }
+            <Tabs
+              value={mobileTab === "detail" ? "library" : mobileTab}
+              onChange={(_event, value) => {
+                if (value === "bookmarks") {
+                  void openBookmarksPage("mobile");
+                  return;
+                }
 
-                    openMobileTab(value, mobileTab);
-                  }}
+                openMobileTab(value, mobileTab);
+              }}
               variant="fullWidth"
               sx={{
                 minHeight: "calc(76px + env(safe-area-inset-bottom))",
@@ -2099,40 +2956,81 @@ export default function HomePage() {
                   fontSize: 12,
                   borderRadius: "12px",
                   margin: "6px 3px 0",
-                  minWidth: 0
+                  minWidth: 0,
                 },
                 "& .MuiTab-root.Mui-selected": {
-                  backgroundColor: "rgba(26, 138, 128, 0.10)"
+                  backgroundColor: "rgba(79, 134, 247, 0.10)",
                 },
                 "& .MuiTabs-indicator": {
-                  display: "none"
-                }
+                  display: "none",
+                },
               }}
             >
-              <Tab icon={<HomeRoundedIcon />} iconPosition="top" label="首頁" value="home" />
-              <Tab icon={<MenuBookRoundedIcon />} iconPosition="top" label="教材" value="library" />
-              <Tab icon={<BookmarkBorderRoundedIcon />} iconPosition="top" label="標記" value="bookmarks" />
-              <Tab icon={<QuizRoundedIcon />} iconPosition="top" label="複習" value="review" />
-              <Tab icon={<UploadFileRoundedIcon />} iconPosition="top" label="匯入" value="import" />
+              <Tab
+                icon={<HomeRoundedIcon />}
+                iconPosition="top"
+                label="首頁"
+                value="home"
+              />
+              <Tab
+                icon={<MenuBookRoundedIcon />}
+                iconPosition="top"
+                label="教材"
+                value="library"
+              />
+              <Tab
+                icon={<BookmarkBorderRoundedIcon />}
+                iconPosition="top"
+                label="標記"
+                value="bookmarks"
+              />
+              <Tab
+                icon={<QuizRoundedIcon />}
+                iconPosition="top"
+                label="複習"
+                value="review"
+              />
+              <Tab
+                icon={<UploadFileRoundedIcon />}
+                iconPosition="top"
+                label="匯入"
+                value="import"
+              />
             </Tabs>
           </Card>
         </Box>
 
-        <Stack direction={{ xs: "column", lg: "row" }} spacing={3} alignItems="stretch" sx={{ display: { xs: "none", lg: "flex" } }}>
+        <Stack
+          direction={{ xs: "column", lg: "row" }}
+          spacing={3}
+          alignItems="stretch"
+          sx={{ display: { xs: "none", lg: "flex" } }}
+        >
           <Card
             elevation={0}
             sx={{
               flex: "0 0 320px",
               border: "1px solid rgba(31,29,26,0.06)",
               borderRadius: "24px",
-              boxShadow: "0 12px 30px rgba(34, 38, 43, 0.05)"
+              boxShadow: "0 12px 30px rgba(34, 38, 43, 0.05)",
             }}
           >
             <CardContent sx={{ p: 3 }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+              <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="center"
+                sx={{ mb: 2 }}
+              >
                 <Typography variant="h6">文章列表</Typography>
                 <Stack direction="row" spacing={1}>
-                  <Button size="small" variant={activeTab === "bookmarks" ? "contained" : "outlined"} onClick={() => void openBookmarksPage("desktop")}>
+                  <Button
+                    size="small"
+                    variant={
+                      activeTab === "bookmarks" ? "contained" : "outlined"
+                    }
+                    onClick={() => void openBookmarksPage("desktop")}
+                  >
                     標記單字
                   </Button>
                   {lessons.length > 0 ? (
@@ -2140,7 +3038,9 @@ export default function HomePage() {
                       size="small"
                       color="error"
                       variant="outlined"
-                      onClick={() => setDeleteTarget({ mode: "all", count: lessons.length })}
+                      onClick={() =>
+                        setDeleteTarget({ mode: "all", count: lessons.length })
+                      }
                       disabled={deletingLesson}
                     >
                       全部刪除
@@ -2177,8 +3077,14 @@ export default function HomePage() {
                             py: 1.25,
                             alignItems: "flex-start",
                             backgroundColor: "#ffffff",
-                            border: lesson.id === selectedLessonId ? "1px solid rgba(26, 138, 128, 0.28)" : "1px solid transparent",
-                            boxShadow: lesson.id === selectedLessonId ? "0 4px 12px rgba(26, 138, 128, 0.08)" : "none"
+                            border:
+                              lesson.id === selectedLessonId
+                                ? "1px solid rgba(79, 134, 247, 0.28)"
+                                : "1px solid transparent",
+                            boxShadow:
+                              lesson.id === selectedLessonId
+                                ? "0 4px 12px rgba(79, 134, 247, 0.08)"
+                                : "none",
                           }}
                         >
                           <ListItemText
@@ -2186,27 +3092,34 @@ export default function HomePage() {
                             secondary={`${lesson.category}｜${toTaipeiDateKey(lesson.createdAt)}`}
                             primaryTypographyProps={{
                               noWrap: true,
-                              fontWeight: lesson.id === selectedLessonId ? 700 : 600
+                              fontWeight:
+                                lesson.id === selectedLessonId ? 700 : 600,
                             }}
                             secondaryTypographyProps={{
                               noWrap: true,
-                              sx: { mt: 0.25, color: "text.secondary" }
+                              sx: { mt: 0.25, color: "text.secondary" },
                             }}
                           />
                         </ListItemButton>
                         <IconButton
-                          color="error"
                           aria-label={`刪除 ${lesson.title}`}
                           onClick={(event) => {
                             event.stopPropagation();
-                            setDeleteTarget({ mode: "single", id: lesson.id, title: lesson.title });
+                            setDeleteTarget({
+                              mode: "single",
+                              id: lesson.id,
+                              title: lesson.title,
+                            });
                           }}
                           disabled={deletingLesson}
+                          sx={{ color: "#df5353" }}
                         >
                           <DeleteOutlineRoundedIcon />
                         </IconButton>
                       </Stack>
-                      {index < filteredLessons.length - 1 ? <Divider sx={{ my: 1 }} /> : null}
+                      {index < filteredLessons.length - 1 ? (
+                        <Divider sx={{ my: 1 }} />
+                      ) : null}
                     </Box>
                   ))}
                 </List>
@@ -2220,7 +3133,7 @@ export default function HomePage() {
               flex: 1,
               border: "1px solid rgba(31,29,26,0.06)",
               borderRadius: "24px",
-              boxShadow: "0 12px 30px rgba(34, 38, 43, 0.05)"
+              boxShadow: "0 12px 30px rgba(34, 38, 43, 0.05)",
             }}
           >
             <CardContent sx={{ p: 3.5 }}>
@@ -2233,8 +3146,16 @@ export default function HomePage() {
                     </Typography>
                   </Box>
 
-                  <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.06)", borderRadius: "20px" }}>
-                    <CardContent sx={{ p: 3 }}>{renderBookmarkedVocabularyContent()}</CardContent>
+                  <Card
+                    elevation={0}
+                    sx={{
+                      border: "1px solid rgba(31,29,26,0.06)",
+                      borderRadius: "20px",
+                    }}
+                  >
+                    <CardContent sx={{ p: 3 }}>
+                      {renderBookmarkedVocabularyContent()}
+                    </CardContent>
                   </Card>
                 </Stack>
               ) : activeTab === "wrongs" ? (
@@ -2246,8 +3167,16 @@ export default function HomePage() {
                     </Typography>
                   </Box>
 
-                  <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.06)", borderRadius: "20px" }}>
-                    <CardContent sx={{ p: 3 }}>{renderWrongCardsContent()}</CardContent>
+                  <Card
+                    elevation={0}
+                    sx={{
+                      border: "1px solid rgba(31,29,26,0.06)",
+                      borderRadius: "20px",
+                    }}
+                  >
+                    <CardContent sx={{ p: 3 }}>
+                      {renderWrongCardsContent()}
+                    </CardContent>
                   </Card>
                 </Stack>
               ) : loadingLesson ? (
@@ -2255,8 +3184,16 @@ export default function HomePage() {
               ) : selectedLesson ? (
                 <Stack spacing={3}>
                   <Box>
-                    <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
-                      <Typography variant="h4" sx={{ minWidth: 0, flex: 1, fontSize: 18 }}>
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      alignItems="flex-start"
+                      justifyContent="space-between"
+                    >
+                      <Typography
+                        variant="h4"
+                        sx={{ minWidth: 0, flex: 1, fontSize: 18 }}
+                      >
                         {selectedLesson.title}
                       </Typography>
                       <Stack direction="row" spacing={0.5}>
@@ -2266,8 +3203,8 @@ export default function HomePage() {
                           sx={{
                             color: "primary.main",
                             "&:hover": {
-                              backgroundColor: "rgba(26, 138, 128, 0.08)"
-                            }
+                              backgroundColor: "rgba(79, 134, 247, 0.08)",
+                            },
                           }}
                         >
                           <EditRoundedIcon fontSize="small" />
@@ -2277,38 +3214,61 @@ export default function HomePage() {
                           onClick={() => void handleDeleteLesson()}
                           disabled={deletingLesson}
                           sx={{
-                            color: "#b3261e",
+                            color: "#df5353",
                             "&:hover": {
-                              backgroundColor: "rgba(179, 38, 30, 0.08)"
-                            }
+                              backgroundColor: "rgba(223, 83, 83, 0.12)",
+                            },
                           }}
                         >
                           <DeleteOutlineRoundedIcon fontSize="small" />
                         </IconButton>
                       </Stack>
                     </Stack>
-                    <Chip label={selectedLesson.category} variant="outlined" sx={{ mt: 1 }} />
+                    <Chip
+                      label={selectedLesson.category}
+                      variant="outlined"
+                      sx={{ mt: 1 }}
+                    />
                     <Typography color="text.secondary" sx={{ mt: 1 }}>
-                      匯入時間：{new Date(selectedLesson.createdAt).toLocaleString("zh-TW")}
+                      匯入時間：
+                      {new Date(selectedLesson.createdAt).toLocaleString(
+                        "zh-TW",
+                      )}
                     </Typography>
                   </Box>
 
                   {isEditingLesson ? (
-                    <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.06)", borderRadius: "20px" }}>
+                    <Card
+                      elevation={0}
+                      sx={{
+                        border: "1px solid rgba(31,29,26,0.06)",
+                        borderRadius: "20px",
+                      }}
+                    >
                       <CardContent sx={{ pt: 0 }}>
                         <Stack spacing={2}>
-                          <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start" }}>
+                          <Stack
+                            direction="row"
+                            spacing={2}
+                            sx={{ alignItems: "flex-start" }}
+                          >
                             <TextField
                               fullWidth
                               size="small"
                               label="文章標題"
                               value={editingTitle}
-                              onChange={(event) => setEditingTitle(event.target.value)}
+                              onChange={(event) =>
+                                setEditingTitle(event.target.value)
+                              }
                             />
                             <Select
                               size="small"
                               value={editingCategory}
-                              onChange={(event) => setEditingCategory(event.target.value as LessonCategory)}
+                              onChange={(event) =>
+                                setEditingCategory(
+                                  event.target.value as LessonCategory,
+                                )
+                              }
                               sx={{ minWidth: 96 }}
                             >
                               <MenuItem value="文章">文章</MenuItem>
@@ -2320,17 +3280,25 @@ export default function HomePage() {
                             rows={12}
                             label="編輯文章原始內容"
                             value={editingLessonText}
-                            onChange={(event) => setEditingLessonText(event.target.value)}
+                            onChange={(event) =>
+                              setEditingLessonText(event.target.value)
+                            }
                             sx={{
                               "& .MuiInputBase-inputMultiline": {
                                 overflowY: "auto",
-                                resize: "none"
-                              }
+                                resize: "none",
+                              },
                             }}
                           />
                           <Button
                             variant="contained"
-                            startIcon={savingLesson ? <CircularProgress size={18} color="inherit" /> : <SaveRoundedIcon />}
+                            startIcon={
+                              savingLesson ? (
+                                <CircularProgress size={18} color="inherit" />
+                              ) : (
+                                <SaveRoundedIcon />
+                              )
+                            }
                             onClick={() => void handleUpdateLesson()}
                             disabled={savingLesson}
                             sx={{ alignSelf: "flex-start" }}
@@ -2342,7 +3310,13 @@ export default function HomePage() {
                     </Card>
                   ) : null}
 
-                  <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.06)", borderRadius: "20px" }}>
+                  <Card
+                    elevation={0}
+                    sx={{
+                      border: "1px solid rgba(31,29,26,0.06)",
+                      borderRadius: "20px",
+                    }}
+                  >
                     <CardContent sx={{ p: 1.25 }}>
                       <Tabs
                         value={activeDetailTab}
@@ -2354,25 +3328,51 @@ export default function HomePage() {
                         }}
                         variant="fullWidth"
                       >
-                        <Tab label={renderCountTabLabel("句子", selectedLesson.sentences.length)} value="sentences" />
                         <Tab
                           label={renderCountTabLabel(
-                            vocabularyViewMode === "bookmarked" ? "標記單字" : "單字",
-                            vocabularyViewMode === "bookmarked" ? bookmarkedVocabulary.length : selectedLesson.vocabulary.length
+                            "句子",
+                            selectedLesson.sentences.length,
+                          )}
+                          value="sentences"
+                        />
+                        <Tab
+                          label={renderCountTabLabel(
+                            vocabularyViewMode === "bookmarked"
+                              ? "標記單字"
+                              : "單字",
+                            vocabularyViewMode === "bookmarked"
+                              ? bookmarkedVocabulary.length
+                              : selectedLesson.vocabulary.length,
                           )}
                           value="vocabulary"
                         />
-                        <Tab label={renderCountTabLabel("文法", selectedLesson.grammar.length)} value="grammar" />
+                        <Tab
+                          label={renderCountTabLabel(
+                            "文法",
+                            selectedLesson.grammar.length,
+                          )}
+                          value="grammar"
+                        />
                       </Tabs>
                     </CardContent>
                   </Card>
 
-                  <Card elevation={0} sx={{ border: "1px solid rgba(31,29,26,0.06)", borderRadius: "20px" }}>
-                    <CardContent sx={{ p: 3 }}>{renderDetailContent(selectedLesson)}</CardContent>
+                  <Card
+                    elevation={0}
+                    sx={{
+                      border: "1px solid rgba(31,29,26,0.06)",
+                      borderRadius: "20px",
+                    }}
+                  >
+                    <CardContent sx={{ p: 3 }}>
+                      {renderDetailContent(selectedLesson)}
+                    </CardContent>
                   </Card>
                 </Stack>
               ) : (
-                <Alert severity="info">先從左邊選一篇文章，才能看句子、單字與文法。</Alert>
+                <Alert severity="info">
+                  先從左邊選一篇文章，才能看句子、單字與文法。
+                </Alert>
               )}
             </CardContent>
           </Card>
@@ -2383,7 +3383,7 @@ export default function HomePage() {
               flex: "0 0 380px",
               border: "1px solid rgba(31,29,26,0.06)",
               borderRadius: "24px",
-              boxShadow: "0 12px 30px rgba(34, 38, 43, 0.05)"
+              boxShadow: "0 12px 30px rgba(34, 38, 43, 0.05)",
             }}
           >
             <CardContent sx={{ p: 3 }}>
@@ -2392,10 +3392,19 @@ export default function HomePage() {
                   <CircularProgress size={24} />
                 ) : currentCard ? (
                   <Stack spacing={2}>
-                    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      useFlexGap
+                      flexWrap="wrap"
+                    >
                       <Chip
                         label={
-                          currentCard.kind === "sentence" ? "句子題" : currentCard.kind === "vocabulary" ? "單字題" : "文法題"
+                          currentCard.kind === "sentence"
+                            ? "句子題"
+                            : currentCard.kind === "vocabulary"
+                              ? "單字題"
+                              : "文法題"
                         }
                         color="secondary"
                       />
@@ -2409,7 +3418,9 @@ export default function HomePage() {
 
                     <Typography variant="h6">{currentCard.prompt}</Typography>
                     {currentCard.hint ? (
-                      <Typography color="text.secondary">{currentCard.hint}</Typography>
+                      <Typography color="text.secondary">
+                        {currentCard.hint}
+                      </Typography>
                     ) : null}
 
                     <Stack spacing={1.5}>
@@ -2418,7 +3429,9 @@ export default function HomePage() {
                         const color =
                           answered && choice === currentCard.answer
                             ? "success"
-                            : answered && chosen && choice !== currentCard.answer
+                            : answered &&
+                                chosen &&
+                                choice !== currentCard.answer
                               ? "error"
                               : "inherit";
 
@@ -2435,20 +3448,24 @@ export default function HomePage() {
                               alignItems: "flex-start",
                               backgroundColor:
                                 answered && choice === currentCard.answer
-                                  ? "rgba(26, 138, 128, 0.08)"
-                                  : answered && chosen && choice !== currentCard.answer
+                                  ? "rgba(79, 134, 247, 0.08)"
+                                  : answered &&
+                                      chosen &&
+                                      choice !== currentCard.answer
                                     ? "rgba(211, 47, 47, 0.08)"
                                     : chosen
-                                      ? "rgba(26, 138, 128, 0.06)"
+                                      ? "rgba(79, 134, 247, 0.06)"
                                       : "#ffffff",
                               borderColor:
                                 answered && choice === currentCard.answer
                                   ? "success.main"
-                                  : answered && chosen && choice !== currentCard.answer
+                                  : answered &&
+                                      chosen &&
+                                      choice !== currentCard.answer
                                     ? "error.main"
                                     : chosen
                                       ? "primary.main"
-                                      : undefined
+                                      : undefined,
                             }}
                           >
                             {choice}
@@ -2459,7 +3476,9 @@ export default function HomePage() {
 
                     {answered ? (
                       <Alert severity={isCorrect ? "success" : "warning"}>
-                        {isCorrect ? "答對了。" : `答錯了，正解是：${currentCard.answer}`}
+                        {isCorrect
+                          ? "答對了。"
+                          : `答錯了，正解是：${currentCard.answer}`}
                       </Alert>
                     ) : null}
 
@@ -2467,7 +3486,13 @@ export default function HomePage() {
                       variant="contained"
                       onClick={() => void handleReview()}
                       disabled={!answered || reviewing}
-                      startIcon={reviewing ? <CircularProgress size={18} color="inherit" /> : <AutoStoriesRoundedIcon />}
+                      startIcon={
+                        reviewing ? (
+                          <CircularProgress size={18} color="inherit" />
+                        ) : (
+                          <AutoStoriesRoundedIcon />
+                        )
+                      }
                       sx={reviewActionButtonSx}
                     >
                       {reviewing ? "更新中" : "下一題"}
@@ -2477,7 +3502,9 @@ export default function HomePage() {
                       <Stack>
                         <Button
                           variant="contained"
-                          onClick={() => void handleMasterVocabulary(currentCard)}
+                          onClick={() =>
+                            void handleMasterVocabulary(currentCard)
+                          }
                           disabled={reviewing}
                           startIcon={<DoneRoundedIcon />}
                           sx={reviewActionButtonSx}
@@ -2488,7 +3515,9 @@ export default function HomePage() {
                     ) : null}
                   </Stack>
                 ) : (
-                  <Alert severity="info">先匯入至少一個有中文意思的單字，這裡就會開始隨機出題。</Alert>
+                  <Alert severity="info">
+                    先匯入至少一個有中文意思的單字，這裡就會開始隨機出題。
+                  </Alert>
                 )}
               </Stack>
             </CardContent>
@@ -2496,8 +3525,15 @@ export default function HomePage() {
         </Stack>
       </Stack>
 
-      <Dialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} fullWidth maxWidth="xs">
-        <DialogTitle>{deleteTarget?.mode === "all" ? "全部刪除" : "刪除文章"}</DialogTitle>
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>
+          {deleteTarget?.mode === "all" ? "全部刪除" : "刪除文章"}
+        </DialogTitle>
         <DialogContent>
           <DialogContentText>
             {deleteTarget?.mode === "single"
@@ -2519,7 +3555,10 @@ export default function HomePage() {
             color="error"
             onClick={() =>
               deleteTarget?.mode === "single"
-                ? void handleDeleteLessonById(deleteTarget.id, deleteTarget.title)
+                ? void handleDeleteLessonById(
+                    deleteTarget.id,
+                    deleteTarget.title,
+                  )
                 : deleteTarget?.mode === "all"
                   ? void handleDeleteAllLessons()
                   : undefined
@@ -2531,6 +3570,58 @@ export default function HomePage() {
           </Button>
         </DialogActions>
       </Dialog>
+      <Snackbar
+        open={Boolean(error)}
+        autoHideDuration={4200}
+        onClose={handleCloseErrorSnackbar}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        sx={{ mt: "calc(env(safe-area-inset-top) + 8px)" }}
+      >
+        <Alert
+          onClose={handleCloseErrorSnackbar}
+          severity="error"
+          variant="standard"
+          sx={{
+            width: "100%",
+            minWidth: { xs: "calc(100vw - 24px)", sm: 420 },
+            backgroundColor: "#fff5f7",
+            border: "1px solid #f0d6dd",
+            color: "#5e4450",
+            boxShadow: "0 10px 22px rgba(34, 38, 43, 0.10)",
+            "& .MuiAlert-icon": {
+              color: "#c97c8a",
+            },
+          }}
+        >
+          {error}
+        </Alert>
+      </Snackbar>
+      <Snackbar
+        open={Boolean(success)}
+        autoHideDuration={3600}
+        onClose={handleCloseSuccessSnackbar}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        sx={{ mt: "calc(env(safe-area-inset-top) + 8px)" }}
+      >
+        <Alert
+          onClose={handleCloseSuccessSnackbar}
+          severity="success"
+          variant="standard"
+          sx={{
+            width: "100%",
+            minWidth: { xs: "calc(100vw - 24px)", sm: 420 },
+            backgroundColor: "#eef4ff",
+            border: "1px solid #cfe0ff",
+            color: "#2f4e86",
+            boxShadow: "0 10px 22px rgba(34, 38, 43, 0.10)",
+            "& .MuiAlert-icon": {
+              color: "#4f86f7",
+            },
+          }}
+        >
+          {success}
+        </Alert>
+      </Snackbar>
     </Container>
   );
 }

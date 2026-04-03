@@ -7,6 +7,7 @@ CONFIG_ARCHIVE_PATH="${CONFIG_ARCHIVE_PATH:-$PROJECT_ROOT/deploy-config.tar.gz}"
 IMAGE_ARCHIVE_PATH="${IMAGE_ARCHIVE_PATH:-$PROJECT_ROOT/app-image.tar.gz}"
 APP_IMAGE_NAME="${APP_IMAGE_NAME:-jp-n1:deploy}"
 NODE_IMAGE="${NODE_IMAGE:-}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-linux/amd64}"
 REMOTE_USER="${REMOTE_USER:-root}"
 REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST to your VPS IP or hostname.}"
 REMOTE_CONFIG_PATH="${REMOTE_CONFIG_PATH:-/root/deploy-config.tar.gz}"
@@ -22,13 +23,17 @@ trap cleanup EXIT
 
 echo "Packaging project from: $PROJECT_ROOT"
 
-echo "Building production image locally: $APP_IMAGE_NAME"
+echo "Building production image locally: $APP_IMAGE_NAME ($TARGET_PLATFORM)"
 cd "$PROJECT_ROOT"
 DOCKER_BUILD_ARGS=(-t "$APP_IMAGE_NAME")
 if [[ -n "$NODE_IMAGE" ]]; then
   DOCKER_BUILD_ARGS+=(--build-arg "NODE_IMAGE=$NODE_IMAGE")
 fi
-docker build "${DOCKER_BUILD_ARGS[@]}" .
+if docker buildx version >/dev/null 2>&1; then
+  docker buildx build --platform "$TARGET_PLATFORM" --load "${DOCKER_BUILD_ARGS[@]}" .
+else
+  docker build --platform "$TARGET_PLATFORM" "${DOCKER_BUILD_ARGS[@]}" .
+fi
 
 echo "Saving production image archive"
 docker save "$APP_IMAGE_NAME" | gzip > "$IMAGE_ARCHIVE_PATH"

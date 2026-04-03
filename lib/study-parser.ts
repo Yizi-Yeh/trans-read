@@ -36,6 +36,7 @@ function cleanLine(line: string) {
     .replace(/^#{1,6}\s*/, "")
     .replace(/^\*\s+/, "")
     .replace(/\*\*/g, "")
+    .replace(/^([A-Za-z0-9ぁ-んァ-ン一-龥々ー・／/（）()～〜\-\s]+?)\s*:\s*/, "$1：")
     .replace(/\s+/g, " ");
 }
 
@@ -230,7 +231,9 @@ function isIgnorableGrammarPattern(pattern: string) {
 }
 
 function isStructuredGrammarSubField(line: string) {
-  return /^(接續|意思|語氣／用法說明|用法說明|語氣|例句|日文|中文)：/.test(line.replace(/^-+\s*/, ""));
+  return /^(接續|意思|意義|語氣／用法說明|語氣\/用法說明|語氣／用法|語氣\/用法|語氣與用法說明|語氣與用法|用法說明|語氣|例句|日文|中文|例句中文)：/.test(
+    line.replace(/^-+\s*/, "")
+  );
 }
 
 function isStructuredVocabularySubField(line: string) {
@@ -239,6 +242,10 @@ function isStructuredVocabularySubField(line: string) {
 
 function isStrictFormatSectionLabel(line: string) {
   const normalized = line.replace(/^-+\s*/, "");
+  if (/^(單字解析|文法解析|例句|常用使用場景)[：:].*$/.test(normalized)) {
+    return true;
+  }
+
   return (
     normalized === "單字解析：" ||
     normalized === "文法解析：" ||
@@ -302,6 +309,16 @@ function parseInlineGrammar(line: string) {
     pattern: raw,
     meaningZh: raw
   };
+}
+
+function looksLikeStructuredGrammarBlockStart(lines: string[], index: number) {
+  const current = lines[index] ?? "";
+  if (!/^-?\s*文法：/.test(current)) {
+    return false;
+  }
+
+  const windowLines = [lines[index + 1] ?? "", lines[index + 2] ?? "", lines[index + 3] ?? "", lines[index + 4] ?? ""];
+  return windowLines.some((line) => /^(接續|意思|意義|語氣／用法說明|語氣\/用法說明|語氣／用法|語氣\/用法|語氣與用法說明|語氣與用法|用法說明|語氣|例句|日文|中文)：/.test(line.replace(/^-+\s*/, "")));
 }
 
 function isBoilerplateLine(line: string) {
@@ -479,7 +496,7 @@ export function parseStudyText(sourceText: string): ParsedLesson {
     }
 
     const inlineGrammar = parseInlineGrammar(line);
-    if (inlineGrammar) {
+    if (inlineGrammar && !looksLikeStructuredGrammarBlockStart(lines, index)) {
       const exampleLine = lines[index + 1]?.startsWith("例句：") ? lines[index + 1] : "";
       const exampleMatch = exampleLine.match(/^例句：\s*(.+?)[。.]?（(.+?)）$/);
 
@@ -605,6 +622,18 @@ export function parseStudyText(sourceText: string): ParsedLesson {
     }
 
     if (mode === "sentences") {
+      const strictOriginal = extractPairValueFromLabels(line, ["原句", "原文"]);
+      const strictTranslation = extractPairValueFromLabels(lines[index + 1] ?? "", ["中文翻譯", "中文", "翻譯"]);
+      if (strictOriginal && strictTranslation) {
+        sentences.push({
+          sectionTitle: currentSection,
+          original: strictOriginal,
+          translationZh: strictTranslation
+        });
+        index += 1;
+        continue;
+      }
+
       if (
         line === "無" ||
         isStrictFormatSectionLabel(line) ||
@@ -639,23 +668,6 @@ export function parseStudyText(sourceText: string): ParsedLesson {
         });
         index += 1;
         continue;
-      }
-
-      const nextLine = lines[index + 1];
-      if (
-        line &&
-        nextLine &&
-        !isSectionBreakLine(line) &&
-        !line.startsWith("中文：") &&
-        !nextLine.startsWith("原文：") &&
-        !nextLine.startsWith("翻譯：")
-      ) {
-        sentences.push({
-          sectionTitle: currentSection,
-          original: normalizeTitle(normalizedOriginal),
-          translationZh: normalizeTitle(nextLine)
-        });
-        index += 1;
       }
 
       continue;
@@ -834,27 +846,55 @@ export function parseStudyText(sourceText: string): ParsedLesson {
         continue;
       }
 
-      if (line === "無" || isStructuredVocabularySubField(line)) {
+      if (
+        line === "無" ||
+        isStrictFormatSectionLabel(line) ||
+        isStructuredVocabularySubField(line) ||
+        line.startsWith("例句中文：") ||
+        line.startsWith("單字例句中文：")
+      ) {
         continue;
       }
 
       if (/^-?\s*文法：/.test(line)) {
         const pattern = extractPairValueFromLabels(line.replace(/^-+\s*/, ""), ["文法"]);
-        const connection = extractPairValueFromLabels(lines[index + 1] ?? "", ["接續"]);
-        const meaningZh = extractPairValueFromLabels(lines[index + 2] ?? "", ["意思"]);
-        const usage = extractPairValueFromLabels(lines[index + 3] ?? "", ["語氣／用法說明", "用法說明", "語氣"]);
+        let connection = "";
+        let meaningZh = "";
+        let usage = "";
 
         let exampleSentence = "";
         let exampleTranslation = "";
-        let consumedUntil = index + 3;
+        let consumedUntil = index;
 
-        for (let offset = 4; offset <= 10; offset += 1) {
+        for (let offset = 1; offset <= 12; offset += 1) {
           const currentLine = lines[index + offset] ?? "";
           const nextLine = lines[index + offset + 1] ?? "";
           const normalizedCurrentLine = currentLine.replace(/^-+\s*/, "");
           const normalizedNextLine = nextLine.replace(/^-+\s*/, "");
 
+          if (!currentLine) {
+            break;
+          }
+
+          connection ||= extractPairValueFromLabels(normalizedCurrentLine, ["接續"]);
+          meaningZh ||= extractPairValueFromLabels(normalizedCurrentLine, ["意思", "意義"]);
+          usage ||= extractPairValueFromLabels(normalizedCurrentLine, [
+            "語氣／用法說明",
+            "語氣/用法說明",
+            "語氣／用法",
+            "語氣/用法",
+            "語氣與用法說明",
+            "語氣與用法",
+            "用法說明",
+            "語氣"
+          ]);
+
           if (/^例句：/.test(normalizedCurrentLine)) {
+            const inlineExampleMatch = normalizedCurrentLine.match(/^例句：\s*(.+?)[。.]?（(.+?)）$/);
+            if (inlineExampleMatch) {
+              exampleSentence = inlineExampleMatch[1].trim();
+              exampleTranslation = inlineExampleMatch[2].trim();
+            }
             consumedUntil = index + offset;
             continue;
           }
@@ -867,6 +907,7 @@ export function parseStudyText(sourceText: string): ParsedLesson {
           }
 
           if (
+            /^-?\s*文法：/.test(currentLine) ||
             isSentenceIndexLine(currentLine) ||
             isTitleLine(currentLine) ||
             isVocabularyHeader(currentLine) ||

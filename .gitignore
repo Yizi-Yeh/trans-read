@@ -7,8 +7,6 @@ out/
 
 # local env files (keep only examples)
 .env*
-!.env.example
-!.env.production.example
 
 # logs
 npm-debug.log*

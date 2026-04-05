@@ -22,6 +22,7 @@ import {
   ListItemButton,
   ListItemText,
   MenuItem,
+  InputAdornment,
   Select,
   Snackbar,
   Stack,
@@ -45,6 +46,7 @@ import BookmarkBorderRoundedIcon from "@mui/icons-material/BookmarkBorderRounded
 import BookmarkRoundedIcon from "@mui/icons-material/BookmarkRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import DoneRoundedIcon from "@mui/icons-material/DoneRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import type {
   ImportedLesson,
   LessonCategory,
@@ -205,10 +207,12 @@ type StoredUiState = {
     | "bookmarks"
     | "wrongs"
     | "import";
-  reviewMode: "all" | "wrong";
+  reviewMode: "all" | "wrong" | "today";
   selectedLessonId: number | null;
   vocabularyViewMode: "lesson" | "bookmarked";
 };
+
+type LessonDateFilter = "all" | "today" | "7d" | "30d";
 
 type ReviewTarget = {
   id: number;
@@ -416,7 +420,11 @@ async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit) {
 
 export default function HomePage() {
   const [lessonFilter, setLessonFilter] = useState<LessonCategory>("文章");
-  const [reviewMode, setReviewMode] = useState<"all" | "wrong">("all");
+  const [lessonDateFilter, setLessonDateFilter] = useState<LessonDateFilter>("all");
+  const [lessonSearchKeyword, setLessonSearchKeyword] = useState("");
+  const [reviewMode, setReviewMode] = useState<"all" | "wrong" | "today">(
+    "all",
+  );
   const [vocabularyViewMode, setVocabularyViewMode] = useState<
     "lesson" | "bookmarked"
   >("lesson");
@@ -465,6 +473,7 @@ export default function HomePage() {
   const [savingTitle, setSavingTitle] = useState(false);
   const [deletingLesson, setDeletingLesson] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [reviewProgressCount, setReviewProgressCount] = useState(0);
   const [bookmarkedVocabulary, setBookmarkedVocabulary] = useState<
     BookmarkedVocabularyItem[]
   >([]);
@@ -484,8 +493,59 @@ export default function HomePage() {
 
   const currentCard = cards[0] ?? null;
   const isCorrect = currentCard ? selectedChoice === currentCard.answer : false;
-  const filteredLessons = lessons.filter(
-    (lesson) => lesson.category === lessonFilter,
+  const todayDateKey = toTaipeiDateKey(new Date());
+  const filteredLessons = lessons.filter((lesson) => {
+    if (lesson.category !== lessonFilter) {
+      return false;
+    }
+
+    if (lessonDateFilter !== "all") {
+      if (lessonDateFilter === "today" && toTaipeiDateKey(lesson.createdAt) !== todayDateKey) {
+        return false;
+      }
+
+      if (lessonDateFilter === "7d" || lessonDateFilter === "30d") {
+        const days = lessonDateFilter === "7d" ? 7 : 30;
+        const ageMs = Date.now() - new Date(lesson.createdAt).getTime();
+        if (ageMs < 0 || ageMs > days * 24 * 60 * 60 * 1000) {
+          return false;
+        }
+      }
+    }
+
+    const keyword = lessonSearchKeyword.trim().toLowerCase();
+    if (!keyword) {
+      return true;
+    }
+
+    const searchable = [
+      lesson.title,
+      lesson.category,
+      ...lesson.vocabularyPreview,
+      ...lesson.grammarPreview
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return searchable.includes(keyword);
+  });
+  const todayNewVocabularyTotal = lessons
+    .filter((lesson) => toTaipeiDateKey(lesson.createdAt) === todayDateKey)
+    .reduce((sum, lesson) => sum + lesson.vocabularyCount, 0);
+  const pastReviewVocabularyTotal = Math.max(
+    stats.dueTotal - todayNewVocabularyTotal,
+    0,
+  );
+  const reviewTotalCount =
+    reviewMode === "today"
+      ? todayNewVocabularyTotal
+      : reviewMode === "wrong"
+        ? stats.wrongTotal
+        : stats.dueTotal;
+  const reviewCurrentCount = Math.min(reviewProgressCount, reviewTotalCount);
+  const learningTotal = Math.max(
+    pastReviewVocabularyTotal + todayNewVocabularyTotal,
+    1,
   );
   const mobileCardSx = {
     border: "1px solid rgba(31,29,26,0.06)",
@@ -512,23 +572,23 @@ export default function HomePage() {
   const masteredButtonSx = {
     py: 1.35,
     "&.Mui-disabled": {
-      backgroundColor: "#e8eefb",
-      borderColor: "#d2def6",
-      color: "#6b7da1",
+      backgroundColor: "#EDE7E1",
+      borderColor: "#DDD3CA",
+      color: "#5B5045",
     },
     "&.Mui-disabled .MuiButton-startIcon": {
-      color: "#91a1c2",
+      color: "#7A6F64",
     },
   } as const;
   const reviewActionButtonSx = {
     py: 1.35,
     "&.Mui-disabled": {
-      backgroundColor: "#e8eefb",
-      borderColor: "#d2def6",
-      color: "#6b7da1",
+      backgroundColor: "#EDE7E1",
+      borderColor: "#DDD3CA",
+      color: "#5B5045",
     },
     "&.Mui-disabled .MuiButton-startIcon": {
-      color: "#91a1c2",
+      color: "#7A6F64",
     },
   } as const;
   const importActionButtonSx = {
@@ -633,14 +693,16 @@ export default function HomePage() {
   };
 
   const openBookmarksPage = async (target: "desktop" | "mobile") => {
+    setVocabularyViewMode("bookmarked");
+    setActiveTab("bookmarks");
+    if (target === "mobile") {
+      openMobileTab("bookmarks", mobileTab);
+    }
+
     try {
       await loadBookmarkedVocabulary();
-      setVocabularyViewMode("bookmarked");
-      setActiveTab("bookmarks");
-      if (target === "mobile") {
-        openMobileTab("bookmarks", mobileTab);
-      }
     } catch (bookmarkError) {
+      setBookmarkedVocabulary([]);
       setError(
         bookmarkError instanceof Error
           ? bookmarkError.message
@@ -677,20 +739,24 @@ export default function HomePage() {
   };
 
   const openWrongsPage = async (target: "desktop" | "mobile") => {
+    setActiveTab("wrongs");
+    if (target === "mobile") {
+      openMobileTab("wrongs", mobileTab);
+    }
+
     try {
       await loadWrongCards();
-      setActiveTab("wrongs");
-      if (target === "mobile") {
-        openMobileTab("wrongs", mobileTab);
-      }
     } catch (wrongError) {
+      setWrongCards([]);
       setError(
         wrongError instanceof Error ? wrongError.message : "讀取答錯內容失敗",
       );
     }
   };
 
-  const loadDashboard = async (mode: "all" | "wrong" = reviewMode) => {
+  const loadDashboard = async (
+    mode: "all" | "wrong" | "today" = reviewMode,
+  ) => {
     const { response, payload } = await requestJson<DashboardPayload>(
       `/api/review?mode=${mode}`,
     );
@@ -1207,7 +1273,8 @@ export default function HomePage() {
 
         if (
           storedState?.reviewMode === "all" ||
-          storedState?.reviewMode === "wrong"
+          storedState?.reviewMode === "wrong" ||
+          storedState?.reviewMode === "today"
         ) {
           setReviewMode(storedState.reviewMode);
         }
@@ -1461,6 +1528,7 @@ export default function HomePage() {
       }
 
       syncCardsAndStats(payload.cards, payload.stats);
+      setReviewProgressCount((current) => current + 1);
     } catch (reviewError) {
       setError(
         reviewError instanceof Error ? reviewError.message : "更新複習結果失敗",
@@ -1497,7 +1565,7 @@ export default function HomePage() {
                 backgroundColor:
                   highlightTarget?.kind === "sentence" &&
                   highlightTarget.id === sentence.id
-                    ? "rgba(79, 134, 247, 0.14)"
+                    ? "rgba(201, 181, 156, 0.14)"
                     : "transparent",
                 transition: "background-color 260ms ease",
               }}
@@ -1576,7 +1644,7 @@ export default function HomePage() {
                 backgroundColor:
                   highlightTarget?.kind === "vocabulary" &&
                   highlightTarget.id === item.id
-                    ? "rgba(79, 134, 247, 0.14)"
+                    ? "rgba(201, 181, 156, 0.14)"
                     : "transparent",
                 transition: "background-color 260ms ease",
               }}
@@ -1676,7 +1744,7 @@ export default function HomePage() {
               backgroundColor:
                 highlightTarget?.kind === "grammar" &&
                 highlightTarget.id === item.id
-                  ? "rgba(79, 134, 247, 0.14)"
+                  ? "rgba(201, 181, 156, 0.14)"
                   : "transparent",
               transition: "background-color 260ms ease",
             }}
@@ -1720,73 +1788,98 @@ export default function HomePage() {
       return <Typography color="text.secondary">還沒有資料。</Typography>;
     }
 
+    const groupedLessons = new Map<string, ImportedLesson[]>();
+    filteredLessons.forEach((lesson) => {
+      const dateKey = toTaipeiDateKey(lesson.createdAt);
+      const group = groupedLessons.get(dateKey) ?? [];
+      group.push(lesson);
+      groupedLessons.set(dateKey, group);
+    });
+
     return (
-      <List disablePadding>
-        {filteredLessons.map((lesson, index) => (
-          <Box key={lesson.id}>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <ListItemButton
-                selected={lesson.id === selectedLessonId}
-                onClick={() => void loadLesson(lesson.id)}
-                sx={{
-                  borderRadius: 3,
-                  flex: 1,
-                  minWidth: 0,
-                  px: compact ? 1.25 : 1.5,
-                  py: compact ? 1 : 1.25,
-                  alignItems: "flex-start",
-                  backgroundColor: "#ffffff",
-                  border:
-                    lesson.id === selectedLessonId
-                      ? "1px solid rgba(79, 134, 247, 0.28)"
-                      : "1px solid transparent",
-                  boxShadow:
-                    lesson.id === selectedLessonId
-                      ? "0 4px 12px rgba(79, 134, 247, 0.08)"
-                      : "none",
-                }}
-              >
-                <ListItemText
-                  primary={lesson.title}
-                  secondary={`${lesson.category}｜${toTaipeiDateKey(lesson.createdAt)}`}
-                  primaryTypographyProps={{
-                    noWrap: true,
-                    fontWeight: lesson.id === selectedLessonId ? 700 : 600,
-                  }}
-                  secondaryTypographyProps={{
-                    noWrap: true,
-                    sx: {
-                      mt: 0.25,
-                      color: "text.secondary",
-                    },
-                  }}
-                />
-              </ListItemButton>
-              <IconButton
-                aria-label={`刪除 ${lesson.title}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setDeleteTarget({
-                    mode: "single",
-                    id: lesson.id,
-                    title: lesson.title,
-                  });
-                }}
-                disabled={deletingLesson}
-                sx={{
-                  mt: compact ? 0.25 : 0,
-                  color: "#df5353",
-                }}
-              >
-                <DeleteOutlineRoundedIcon />
-              </IconButton>
-            </Stack>
-            {index < filteredLessons.length - 1 ? (
-              <Divider sx={{ my: compact ? 1 : 1.25 }} />
-            ) : null}
-          </Box>
+      <Stack spacing={compact ? 1.5 : 2}>
+        {Array.from(groupedLessons.entries()).map(([dateKey, lessonsInDate]) => (
+          <Card
+            key={dateKey}
+            elevation={0}
+            sx={{
+              border: "1px solid rgba(31,29,26,0.08)",
+              borderRadius: compact ? "16px" : "18px",
+            }}
+          >
+            <CardContent sx={{ p: compact ? 1.75 : 2 }}>
+              <Stack spacing={compact ? 1 : 1.25}>
+                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                  <Typography sx={{ fontWeight: 800, fontSize: compact ? 15 : 16 }}>
+                    {dateKey === todayDateKey ? "本日新增" : dateKey}
+                  </Typography>
+                  <Typography color="text.secondary" sx={{ fontSize: 13, fontWeight: 700 }}>
+                    {lessonsInDate.length} 篇
+                  </Typography>
+                </Stack>
+                <List disablePadding>
+                  {lessonsInDate.map((lesson, index) => (
+                    <Box key={lesson.id}>
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <ListItemButton
+                          selected={lesson.id === selectedLessonId}
+                          onClick={() => void loadLesson(lesson.id)}
+                          sx={{
+                            borderRadius: 3,
+                            flex: 1,
+                            minWidth: 0,
+                            px: compact ? 1.25 : 1.5,
+                            py: compact ? 1 : 1.25,
+                            alignItems: "flex-start",
+                            backgroundColor: "#ffffff",
+                            border:
+                              lesson.id === selectedLessonId
+                                ? "1px solid rgba(201, 181, 156, 0.28)"
+                                : "1px solid transparent",
+                            boxShadow:
+                              lesson.id === selectedLessonId
+                                ? "0 4px 12px rgba(201, 181, 156, 0.12)"
+                                : "none",
+                          }}
+                        >
+                          <ListItemText
+                            primary={lesson.title}
+                            primaryTypographyProps={{
+                              noWrap: true,
+                              fontWeight: lesson.id === selectedLessonId ? 700 : 600,
+                            }}
+                          />
+                        </ListItemButton>
+                        <IconButton
+                          aria-label={`刪除 ${lesson.title}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setDeleteTarget({
+                              mode: "single",
+                              id: lesson.id,
+                              title: lesson.title,
+                            });
+                          }}
+                          disabled={deletingLesson}
+                          sx={{
+                            mt: compact ? 0.25 : 0,
+                            color: "#C9B59C",
+                          }}
+                        >
+                          <DeleteOutlineRoundedIcon />
+                        </IconButton>
+                      </Stack>
+                      {index < lessonsInDate.length - 1 ? (
+                        <Divider sx={{ my: compact ? 1 : 1.25 }} />
+                      ) : null}
+                    </Box>
+                  ))}
+                </List>
+              </Stack>
+            </CardContent>
+          </Card>
         ))}
-      </List>
+      </Stack>
     );
   };
 
@@ -1927,7 +2020,7 @@ export default function HomePage() {
                   aria-label={`從答錯內容移除 ${item.prompt}`}
                   onClick={() => void handleMasterVocabulary(item)}
                   disabled={reviewing}
-                  sx={{ mt: -0.25, color: "#df5353" }}
+                  sx={{ mt: -0.25, color: "#C9B59C" }}
                 >
                   <DeleteOutlineRoundedIcon fontSize="small" />
                 </IconButton>
@@ -1968,13 +2061,21 @@ export default function HomePage() {
 
     return (
       <Stack spacing={compact ? 2 : 2.5}>
-        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-          <Chip
-            label={currentCard.lessonTitle}
-            variant="outlined"
-            clickable
-            onClick={() => void openReviewCardSource(currentCard)}
-          />
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1.25}>
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ minWidth: 0, flex: 1 }}>
+            <Chip
+              label={currentCard.lessonTitle}
+              variant="outlined"
+              clickable
+              onClick={() => void openReviewCardSource(currentCard)}
+            />
+          </Stack>
+          <Typography
+            color="text.secondary"
+            sx={{ fontSize: 16, fontWeight: 700, whiteSpace: "nowrap", lineHeight: 1.2 }}
+          >
+            {reviewCurrentCount}/{reviewTotalCount}
+          </Typography>
         </Stack>
 
         <Typography
@@ -2012,13 +2113,19 @@ export default function HomePage() {
                   alignItems: "flex-start",
                   px: 1.75,
                   py: 1.35,
+                  color:
+                    answered && choice === currentCard.answer
+                      ? "success.main"
+                      : answered && chosen && choice !== currentCard.answer
+                        ? "error.main"
+                        : "#8E775E",
                   backgroundColor:
                     answered && choice === currentCard.answer
-                      ? "rgba(79, 134, 247, 0.08)"
+                      ? "rgba(201, 181, 156, 0.12)"
                       : answered && chosen && choice !== currentCard.answer
                         ? "rgba(211, 47, 47, 0.08)"
                         : chosen
-                          ? "rgba(79, 134, 247, 0.06)"
+                          ? "rgba(201, 181, 156, 0.08)"
                           : "#ffffff",
                   borderColor:
                     answered && choice === currentCard.answer
@@ -2026,8 +2133,17 @@ export default function HomePage() {
                       : answered && chosen && choice !== currentCard.answer
                         ? "error.main"
                         : chosen
-                          ? "primary.main"
-                          : undefined,
+                          ? "#8E775E"
+                          : "rgba(142, 119, 94, 0.45)",
+                  "&:hover": {
+                    borderColor: "#8E775E",
+                    backgroundColor:
+                      answered && choice === currentCard.answer
+                        ? "rgba(201, 181, 156, 0.12)"
+                        : answered && chosen && choice !== currentCard.answer
+                          ? "rgba(211, 47, 47, 0.08)"
+                          : "rgba(201, 181, 156, 0.08)",
+                  },
                 }}
               >
                 {choice}
@@ -2223,7 +2339,8 @@ export default function HomePage() {
                             letterSpacing: "-0.01em",
                           }}
                         >
-                          {stats.dueTotal}/{stats.vocabularyTotal || 0}
+                          {pastReviewVocabularyTotal + todayNewVocabularyTotal}/
+                          {stats.vocabularyTotal || 0}
                         </Typography>
                       </Stack>
 
@@ -2231,13 +2348,19 @@ export default function HomePage() {
                         sx={{
                           height: 6,
                           borderRadius: 999,
-                          backgroundColor: "rgba(79, 134, 247, 0.10)",
+                          backgroundColor: "rgba(201, 181, 156, 0.10)",
                           overflow: "hidden",
                         }}
                       >
                         <Box
                           sx={{
-                            width: `${stats.vocabularyTotal ? Math.min(100, (stats.dueTotal / stats.vocabularyTotal) * 100) : 0}%`,
+                            width: `${Math.min(
+                              100,
+                              ((pastReviewVocabularyTotal +
+                                todayNewVocabularyTotal) /
+                                learningTotal) *
+                                100,
+                            )}%`,
                             height: "100%",
                             backgroundColor: "primary.main",
                           }}
@@ -2248,7 +2371,15 @@ export default function HomePage() {
                         color="text.secondary"
                         sx={{ textAlign: "right", fontSize: 13, mt: -0.75 }}
                       >
-                        {`${stats.vocabularyTotal ? Math.min(100, Math.round((stats.dueTotal / stats.vocabularyTotal) * 100)) : 0}%`}
+                        {`${Math.min(
+                          100,
+                          Math.round(
+                            ((pastReviewVocabularyTotal +
+                              todayNewVocabularyTotal) /
+                              learningTotal) *
+                              100,
+                          ),
+                        )}%`}
                       </Typography>
 
                       <Stack direction="row" spacing={1.25}>
@@ -2257,20 +2388,26 @@ export default function HomePage() {
                           fullWidth
                           onClick={() => {
                             setReviewMode("all");
+                            setReviewProgressCount(0);
                             void loadDashboard("all");
                             openMobileTab("review", "home");
                           }}
                           sx={{ py: 1, borderRadius: "16px", minHeight: 44 }}
                         >
-                          複習
+                          複習 {pastReviewVocabularyTotal} 詞
                         </Button>
                         <Button
                           variant="outlined"
                           fullWidth
-                          onClick={() => openMobileTab("import", "home")}
+                          onClick={() => {
+                            setReviewMode("today");
+                            setReviewProgressCount(0);
+                            void loadDashboard("today");
+                            openMobileTab("review", "home");
+                          }}
                           sx={{ py: 1, borderRadius: "16px", minHeight: 44 }}
                         >
-                          新增
+                          本日新增 {todayNewVocabularyTotal} 詞
                         </Button>
                       </Stack>
                     </Stack>
@@ -2362,101 +2499,84 @@ export default function HomePage() {
                   </Card>
                 </Stack>
 
-                <Card
-                  elevation={0}
-                  sx={{
-                    ...mobileCardSx,
-                    borderRadius: "20px",
-                    cursor: "pointer",
-                  }}
-                  onClick={() => {
-                    void openBookmarksPage("mobile");
-                  }}
-                >
-                  <CardContent sx={{ p: 2 }}>
-                    <Stack direction="row" spacing={1.25} alignItems="center">
-                      <Box
-                        sx={{
-                          width: 34,
-                          height: 34,
-                          borderRadius: "12px",
-                          display: "grid",
-                          placeItems: "center",
-                          color: "primary.main",
-                        }}
-                      >
-                        <BookmarkBorderRoundedIcon fontSize="small" />
-                      </Box>
-                      <Typography sx={{ fontWeight: 700 }}>標記單字</Typography>
-                    </Stack>
-                    <Typography
-                      color="text.secondary"
-                      sx={{ mt: 1, fontSize: 15 }}
-                    >
-                      {stats.bookmarkedTotal} 個
-                    </Typography>
-                  </CardContent>
-                </Card>
-
-                <Card
-                  elevation={0}
-                  sx={{
-                    ...mobileCardSx,
-                    borderRadius: "20px",
-                    cursor: "pointer",
-                  }}
-                  onClick={() => {
-                    void openWrongsPage("mobile");
-                  }}
-                >
-                  <CardContent sx={{ p: 2 }}>
-                    <Stack direction="row" spacing={1.25} alignItems="center">
-                      <Box
-                        sx={{
-                          width: 34,
-                          height: 34,
-                          borderRadius: "12px",
-                          backgroundColor: "rgba(223, 83, 83, 0.08)",
-                          display: "grid",
-                          placeItems: "center",
-                          color: "#df5353",
-                        }}
-                      >
-                        <ReplayRoundedIcon fontSize="small" />
-                      </Box>
-                      <Typography sx={{ fontWeight: 700 }}>
-                        答錯的內容
-                      </Typography>
-                    </Stack>
-                    {wrongPreviewCards.length > 0 ? (
-                      <Stack spacing={0.75} sx={{ mt: 1 }}>
-                        {wrongPreviewCards.map((card) => (
-                          <Typography
-                            key={`${card.kind}-${card.id}`}
-                            color="text.secondary"
-                            sx={{
-                              fontSize: 14,
-                              lineHeight: 1.5,
-                              display: "-webkit-box",
-                              WebkitLineClamp: 2,
-                              WebkitBoxOrient: "vertical",
-                              overflow: "hidden",
-                            }}
-                          >
-                            {card.prompt}
-                          </Typography>
-                        ))}
+                <Stack direction="row" spacing={1.5}>
+                  <Card
+                    elevation={0}
+                    sx={{
+                      flex: 1,
+                      ...mobileCardSx,
+                      borderRadius: "20px",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => {
+                      void openBookmarksPage("mobile");
+                    }}
+                  >
+                    <CardContent sx={{ p: 2 }}>
+                      <Stack direction="row" spacing={1.25} alignItems="center">
+                        <Box
+                          sx={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: "12px",
+                            display: "grid",
+                            placeItems: "center",
+                            color: "primary.main",
+                          }}
+                        >
+                          <BookmarkBorderRoundedIcon fontSize="small" />
+                        </Box>
+                        <Typography sx={{ fontWeight: 700 }}>標記單字</Typography>
                       </Stack>
-                    ) : (
                       <Typography
                         color="text.secondary"
                         sx={{ mt: 1, fontSize: 15 }}
                       >
-                        目前沒有答錯內容
+                        {stats.bookmarkedTotal} 個
                       </Typography>
-                    )}
-                  </CardContent>
-                </Card>
+                    </CardContent>
+                  </Card>
+
+                  <Card
+                    elevation={0}
+                    sx={{
+                      flex: 1,
+                      ...mobileCardSx,
+                      borderRadius: "20px",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => {
+                      void openWrongsPage("mobile");
+                    }}
+                  >
+                    <CardContent sx={{ p: 2 }}>
+                      <Stack direction="row" spacing={1.25} alignItems="center">
+                        <Box
+                          sx={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: "12px",
+                            backgroundColor: "rgba(201, 181, 156, 0.12)",
+                            display: "grid",
+                            placeItems: "center",
+                            color: "#C9B59C",
+                          }}
+                        >
+                          <ReplayRoundedIcon fontSize="small" />
+                        </Box>
+                        <Typography sx={{ fontWeight: 700 }}>
+                          答錯內容
+                        </Typography>
+                      </Stack>
+                      <Typography
+                        color="text.secondary"
+                        sx={{ mt: 1, fontSize: 15 }}
+                      >
+                        {wrongPreviewCards.length} 筆
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Stack>
 
                 <Card elevation={0} sx={mobileCardSx}>
                   <CardContent sx={{ p: 2.25 }}>
@@ -2593,11 +2713,49 @@ export default function HomePage() {
                     value={lessonFilter}
                     onChange={(_event, value) => setLessonFilter(value)}
                     variant="fullWidth"
-                    sx={{ mb: 2 }}
+                    sx={{ display: "none" }}
                   >
                     <Tab label="文章" value="文章" />
                     <Tab label="歌詞" value="歌詞" />
                   </Tabs>
+                  <Stack spacing={1.25} sx={{ mb: 2 }}>
+                    <TextField
+                      size="small"
+                      fullWidth
+                      placeholder="搜尋單字／標題"
+                      value={lessonSearchKeyword}
+                      onChange={(event) => setLessonSearchKeyword(event.target.value)}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <SearchRoundedIcon fontSize="small" />
+                          </InputAdornment>
+                        )
+                      }}
+                    />
+                    <Stack direction="row" spacing={1}>
+                      <Select
+                        size="small"
+                        fullWidth
+                        value={lessonDateFilter}
+                        onChange={(event) => setLessonDateFilter(event.target.value as LessonDateFilter)}
+                      >
+                        <MenuItem value="all">全部日期</MenuItem>
+                        <MenuItem value="today">本日</MenuItem>
+                        <MenuItem value="7d">最近7日</MenuItem>
+                        <MenuItem value="30d">最近30日</MenuItem>
+                      </Select>
+                      <Select
+                        size="small"
+                        fullWidth
+                        value={lessonFilter}
+                        onChange={(event) => setLessonFilter(event.target.value as LessonCategory)}
+                      >
+                        <MenuItem value="文章">文章</MenuItem>
+                        <MenuItem value="歌詞">歌詞</MenuItem>
+                      </Select>
+                    </Stack>
+                  </Stack>
                   {renderLessonList(true)}
                 </CardContent>
               </Card>
@@ -2640,7 +2798,7 @@ export default function HomePage() {
                                 sx={{
                                   color: "primary.main",
                                   "&:hover": {
-                                    backgroundColor: "rgba(79, 134, 247, 0.08)",
+                                    backgroundColor: "rgba(201, 181, 156, 0.12)",
                                   },
                                 }}
                               >
@@ -2657,9 +2815,9 @@ export default function HomePage() {
                                 }
                                 disabled={deletingLesson}
                                 sx={{
-                                  color: "#df5353",
+                                  color: "#C9B59C",
                                   "&:hover": {
-                                    backgroundColor: "rgba(223, 83, 83, 0.12)",
+                                    backgroundColor: "rgba(201, 181, 156, 0.18)",
                                   },
                                 }}
                               >
@@ -2667,13 +2825,8 @@ export default function HomePage() {
                               </IconButton>
                             </Stack>
                           </Stack>
-                          <Chip
-                            label={selectedLesson.category}
-                            variant="outlined"
-                            sx={{ mt: 1 }}
-                          />
                           <Typography color="text.secondary" sx={{ mt: 1 }}>
-                            匯入時間：
+                            閱讀時間：
                             {new Date(selectedLesson.createdAt).toLocaleString(
                               "zh-TW",
                             )}
@@ -2959,7 +3112,7 @@ export default function HomePage() {
                   minWidth: 0,
                 },
                 "& .MuiTab-root.Mui-selected": {
-                  backgroundColor: "rgba(79, 134, 247, 0.10)",
+                  backgroundColor: "rgba(201, 181, 156, 0.10)",
                 },
                 "& .MuiTabs-indicator": {
                   display: "none",
@@ -3052,11 +3205,49 @@ export default function HomePage() {
                 value={lessonFilter}
                 onChange={(_event, value) => setLessonFilter(value)}
                 variant="fullWidth"
-                sx={{ mb: 2 }}
+                sx={{ display: "none" }}
               >
                 <Tab label="文章" value="文章" />
                 <Tab label="歌詞" value="歌詞" />
               </Tabs>
+              <Stack spacing={1.25} sx={{ mb: 2 }}>
+                <TextField
+                  size="small"
+                  fullWidth
+                  placeholder="搜尋單字／標題"
+                  value={lessonSearchKeyword}
+                  onChange={(event) => setLessonSearchKeyword(event.target.value)}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchRoundedIcon fontSize="small" />
+                      </InputAdornment>
+                    )
+                  }}
+                />
+                <Stack direction="row" spacing={1}>
+                  <Select
+                    size="small"
+                    fullWidth
+                    value={lessonDateFilter}
+                    onChange={(event) => setLessonDateFilter(event.target.value as LessonDateFilter)}
+                  >
+                    <MenuItem value="all">全部日期</MenuItem>
+                    <MenuItem value="today">本日</MenuItem>
+                    <MenuItem value="7d">最近7日</MenuItem>
+                    <MenuItem value="30d">最近30日</MenuItem>
+                  </Select>
+                  <Select
+                    size="small"
+                    fullWidth
+                    value={lessonFilter}
+                    onChange={(event) => setLessonFilter(event.target.value as LessonCategory)}
+                  >
+                    <MenuItem value="文章">文章</MenuItem>
+                    <MenuItem value="歌詞">歌詞</MenuItem>
+                  </Select>
+                </Stack>
+              </Stack>
               {hydrating ? (
                 <CircularProgress size={24} />
               ) : filteredLessons.length === 0 ? (
@@ -3079,25 +3270,20 @@ export default function HomePage() {
                             backgroundColor: "#ffffff",
                             border:
                               lesson.id === selectedLessonId
-                                ? "1px solid rgba(79, 134, 247, 0.28)"
+                                ? "1px solid rgba(201, 181, 156, 0.28)"
                                 : "1px solid transparent",
                             boxShadow:
                               lesson.id === selectedLessonId
-                                ? "0 4px 12px rgba(79, 134, 247, 0.08)"
+                                ? "0 4px 12px rgba(201, 181, 156, 0.12)"
                                 : "none",
                           }}
                         >
                           <ListItemText
                             primary={lesson.title}
-                            secondary={`${lesson.category}｜${toTaipeiDateKey(lesson.createdAt)}`}
                             primaryTypographyProps={{
                               noWrap: true,
                               fontWeight:
                                 lesson.id === selectedLessonId ? 700 : 600,
-                            }}
-                            secondaryTypographyProps={{
-                              noWrap: true,
-                              sx: { mt: 0.25, color: "text.secondary" },
                             }}
                           />
                         </ListItemButton>
@@ -3112,7 +3298,7 @@ export default function HomePage() {
                             });
                           }}
                           disabled={deletingLesson}
-                          sx={{ color: "#df5353" }}
+                          sx={{ color: "#C9B59C" }}
                         >
                           <DeleteOutlineRoundedIcon />
                         </IconButton>
@@ -3203,7 +3389,7 @@ export default function HomePage() {
                           sx={{
                             color: "primary.main",
                             "&:hover": {
-                              backgroundColor: "rgba(79, 134, 247, 0.08)",
+                              backgroundColor: "rgba(201, 181, 156, 0.12)",
                             },
                           }}
                         >
@@ -3214,9 +3400,9 @@ export default function HomePage() {
                           onClick={() => void handleDeleteLesson()}
                           disabled={deletingLesson}
                           sx={{
-                            color: "#df5353",
+                            color: "#C9B59C",
                             "&:hover": {
-                              backgroundColor: "rgba(223, 83, 83, 0.12)",
+                              backgroundColor: "rgba(201, 181, 156, 0.18)",
                             },
                           }}
                         >
@@ -3224,13 +3410,8 @@ export default function HomePage() {
                         </IconButton>
                       </Stack>
                     </Stack>
-                    <Chip
-                      label={selectedLesson.category}
-                      variant="outlined"
-                      sx={{ mt: 1 }}
-                    />
                     <Typography color="text.secondary" sx={{ mt: 1 }}>
-                      匯入時間：
+                      閱讀時間：
                       {new Date(selectedLesson.createdAt).toLocaleString(
                         "zh-TW",
                       )}
@@ -3394,26 +3575,34 @@ export default function HomePage() {
                   <Stack spacing={2}>
                     <Stack
                       direction="row"
-                      spacing={1}
-                      useFlexGap
-                      flexWrap="wrap"
+                      justifyContent="space-between"
+                      alignItems="flex-start"
+                      spacing={1.25}
                     >
-                      <Chip
-                        label={
-                          currentCard.kind === "sentence"
-                            ? "句子題"
-                            : currentCard.kind === "vocabulary"
-                              ? "單字題"
-                              : "文法題"
-                        }
-                        color="secondary"
-                      />
-                      <Chip
-                        label={currentCard.lessonTitle}
-                        variant="outlined"
-                        clickable
-                        onClick={() => void openReviewCardSource(currentCard)}
-                      />
+                      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ minWidth: 0, flex: 1 }}>
+                        <Chip
+                          label={
+                            currentCard.kind === "sentence"
+                              ? "句子題"
+                              : currentCard.kind === "vocabulary"
+                                ? "單字題"
+                                : "文法題"
+                          }
+                          color="secondary"
+                        />
+                        <Chip
+                          label={currentCard.lessonTitle}
+                          variant="outlined"
+                          clickable
+                          onClick={() => void openReviewCardSource(currentCard)}
+                        />
+                      </Stack>
+                      <Typography
+                        color="text.secondary"
+                        sx={{ fontSize: 16, fontWeight: 700, whiteSpace: "nowrap", lineHeight: 1.2 }}
+                      >
+                        {reviewCurrentCount}/{reviewTotalCount}
+                      </Typography>
                     </Stack>
 
                     <Typography variant="h6">{currentCard.prompt}</Typography>
@@ -3446,15 +3635,23 @@ export default function HomePage() {
                               justifyContent: "flex-start",
                               textAlign: "left",
                               alignItems: "flex-start",
+                              color:
+                                answered && choice === currentCard.answer
+                                  ? "success.main"
+                                  : answered &&
+                                        chosen &&
+                                        choice !== currentCard.answer
+                                    ? "error.main"
+                                    : "#8E775E",
                               backgroundColor:
                                 answered && choice === currentCard.answer
-                                  ? "rgba(79, 134, 247, 0.08)"
+                                  ? "rgba(201, 181, 156, 0.12)"
                                   : answered &&
                                       chosen &&
                                       choice !== currentCard.answer
                                     ? "rgba(211, 47, 47, 0.08)"
                                     : chosen
-                                      ? "rgba(79, 134, 247, 0.06)"
+                                      ? "rgba(201, 181, 156, 0.08)"
                                       : "#ffffff",
                               borderColor:
                                 answered && choice === currentCard.answer
@@ -3464,8 +3661,19 @@ export default function HomePage() {
                                       choice !== currentCard.answer
                                     ? "error.main"
                                     : chosen
-                                      ? "primary.main"
-                                      : undefined,
+                                      ? "#8E775E"
+                                      : "rgba(142, 119, 94, 0.45)",
+                              "&:hover": {
+                                borderColor: "#8E775E",
+                                backgroundColor:
+                                  answered && choice === currentCard.answer
+                                    ? "rgba(201, 181, 156, 0.12)"
+                                    : answered &&
+                                          chosen &&
+                                          choice !== currentCard.answer
+                                      ? "rgba(211, 47, 47, 0.08)"
+                                      : "rgba(201, 181, 156, 0.08)",
+                              },
                             }}
                           >
                             {choice}
@@ -3584,12 +3792,12 @@ export default function HomePage() {
           sx={{
             width: "100%",
             minWidth: { xs: "calc(100vw - 24px)", sm: 420 },
-            backgroundColor: "#fff5f7",
-            border: "1px solid #f0d6dd",
-            color: "#5e4450",
+            backgroundColor: "#F8EFDF",
+            border: "1px solid #E4D5BC",
+            color: "#5D5240",
             boxShadow: "0 10px 22px rgba(34, 38, 43, 0.10)",
             "& .MuiAlert-icon": {
-              color: "#c97c8a",
+              color: "#C9B59C",
             },
           }}
         >
@@ -3610,12 +3818,12 @@ export default function HomePage() {
           sx={{
             width: "100%",
             minWidth: { xs: "calc(100vw - 24px)", sm: 420 },
-            backgroundColor: "#eef4ff",
-            border: "1px solid #cfe0ff",
-            color: "#2f4e86",
+            backgroundColor: "#D9CFC7",
+            border: "1px solid #D6CBC1",
+            color: "#5B5045",
             boxShadow: "0 10px 22px rgba(34, 38, 43, 0.10)",
             "& .MuiAlert-icon": {
-              color: "#4f86f7",
+              color: "#B7A288",
             },
           }}
         >

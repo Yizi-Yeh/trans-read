@@ -1,9 +1,9 @@
 :root {
   color-scheme: light;
-  --background: #f3f7fd;
-  --foreground: #25324d;
-  --surface: #ffffff;
-  --border: rgba(79, 134, 247, 0.14);
+  --background: #eef3e3;
+  --foreground: #3f4b35;
+  --surface: #fffbf1;
+  --border: rgba(201, 181, 156, 0.22);
 }
 
 * {
@@ -14,9 +14,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background:
-    radial-gradient(circle at top, rgba(143, 180, 255, 0.42), transparent 34%),
-    linear-gradient(180deg, #f8fbff 0%, #f3f7fd 100%);
+  background: #F9F8F6;
   color: var(--foreground);
 }
 

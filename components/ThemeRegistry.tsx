@@ -7,20 +7,20 @@ const theme = createTheme({
   palette: {
     mode: "light",
     primary: {
-      main: "#4F86F7",
+      main: "#C9B59C",
       contrastText: "#ffffff"
     },
     secondary: {
-      main: "#DCE8FF",
-      contrastText: "#2A3E67"
+      main: "#D9CFC7",
+      contrastText: "#5B5045"
     },
     text: {
-      primary: "#25324D",
-      secondary: "#62708D"
+      primary: "#3F4B35",
+      secondary: "#7A6F64"
     },
     background: {
-      default: "#F3F7FD",
-      paper: "#ffffff"
+      default: "#F9F8F6",
+      paper: "#FFFBF1"
     }
   },
   shape: {
@@ -88,29 +88,29 @@ const theme = createTheme({
       styleOverrides: {
         root: {
           borderRadius: 10,
-          border: "1px solid rgba(79, 134, 247, 0.26)",
+          border: "1px solid rgba(201, 181, 156, 0.28)",
           boxShadow: "none",
           fontWeight: 700,
           fontSize: "1rem",
           lineHeight: 1.4
         },
         contained: {
-          backgroundColor: "#4F86F7",
-          borderColor: "#4F86F7",
+          backgroundColor: "#C9B59C",
+          borderColor: "#C9B59C",
           color: "#ffffff",
           "&:hover": {
-            backgroundColor: "#3E74E6",
-            borderColor: "#3E74E6"
+            backgroundColor: "#B7A288",
+            borderColor: "#B7A288"
           },
           "&.Mui-disabled": {
-            backgroundColor: "#e8eefb",
-            borderColor: "#d2def6",
-            color: "#91a1c2"
+            backgroundColor: "#EDE7E1",
+            borderColor: "#DDD3CA",
+            color: "#9A8A7B"
           }
         },
         outlined: {
-          borderColor: "rgba(79, 134, 247, 0.36)",
-          color: "#4F86F7",
+          borderColor: "rgba(201, 181, 156, 0.45)",
+          color: "#C9B59C",
           backgroundColor: "#ffffff"
         }
       }
@@ -120,7 +120,7 @@ const theme = createTheme({
         root: {
           backgroundImage: "none",
           backgroundColor: "#ffffff",
-          borderColor: "rgba(79, 134, 247, 0.14)",
+          borderColor: "rgba(201, 181, 156, 0.16)",
           boxShadow: "0 8px 24px rgba(34, 38, 43, 0.04)"
         }
       }
@@ -128,9 +128,9 @@ const theme = createTheme({
     MuiChip: {
       styleOverrides: {
         root: {
-          borderColor: "rgba(79, 134, 247, 0.22)",
-          backgroundColor: "#edf3ff",
-          color: "#5f6f8e",
+          borderColor: "rgba(201, 181, 156, 0.28)",
+          backgroundColor: "#D9CFC7",
+          color: "#6A5F54",
           fontSize: "1rem"
         }
       }
@@ -138,19 +138,19 @@ const theme = createTheme({
     MuiTabs: {
       styleOverrides: {
         indicator: {
-          backgroundColor: "#4F86F7"
+          backgroundColor: "#C9B59C"
         }
       }
     },
     MuiTab: {
       styleOverrides: {
         root: {
-          color: "#62708D",
+          color: "#7A6F64",
           fontSize: "1rem",
           lineHeight: 1.4,
           minHeight: 48,
           "&.Mui-selected": {
-            color: "#4F86F7"
+            color: "#C9B59C"
           }
         }
       }

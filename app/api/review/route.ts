@@ -6,7 +6,8 @@ export const runtime = "nodejs";
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const mode = searchParams.get("mode") === "wrong" ? "wrong" : "all";
+    const modeQuery = searchParams.get("mode");
+    const mode = modeQuery === "wrong" ? "wrong" : modeQuery === "today" ? "today" : "all";
 
     return NextResponse.json(await getDashboardData(mode));
   } catch (error) {
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
       id?: number;
       kind?: "sentence" | "vocabulary" | "grammar";
       remembered?: boolean;
-      mode?: "all" | "wrong";
+      mode?: "all" | "wrong" | "today";
     };
 
     if (!body.id || !body.kind || typeof body.remembered !== "boolean") {
@@ -35,7 +36,7 @@ export async function POST(request: Request) {
     });
 
     const [cards, stats] = await Promise.all([
-      listDueReviewCards(20, body.mode === "wrong" ? "wrong" : "all"),
+      listDueReviewCards(20, body.mode === "wrong" ? "wrong" : body.mode === "today" ? "today" : "all"),
       getStats()
     ]);
 

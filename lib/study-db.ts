@@ -5,16 +5,17 @@ import { ImportedLesson, LessonCategory, LessonDetail, ReviewCard } from "@/type
 
 const MINUTE_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const TAIPEI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ebbinghausSchedule = [
   20 * MINUTE_MS,
   DAY_MS,
-  DAY_MS * 2,
-  DAY_MS * 4,
+  DAY_MS * 2.5,
   DAY_MS * 7,
-  DAY_MS * 15,
-  DAY_MS * 30
+  DAY_MS * 14,
+  DAY_MS * 30,
+  DAY_MS * 90
 ];
-const AGAIN_MS = 10 * MINUTE_MS;
+const AGAIN_MS = 20 * MINUTE_MS;
 const CACHE_TTL_MS = 3 * 1000;
 
 type LessonWithCounts = Pick<Lesson, "id" | "title" | "category" | "createdAt"> & {
@@ -28,8 +29,6 @@ type LessonWithCounts = Pick<Lesson, "id" | "title" | "category" | "createdAt"> 
 type ReviewVocabularyCandidate = Vocabulary & {
   lesson: Lesson;
 };
-
-const BOOKMARKED_REVIEW_RATIO = 0.65;
 
 type DashboardStats = {
   lessonTotal: number;
@@ -73,6 +72,23 @@ function setCachedValue<T>(value: T): CacheEntry<T> {
 function invalidateDashboardCache() {
   lessonsCache = null;
   statsCache = null;
+}
+
+function getTaipeiDayRange(now = new Date()) {
+  const shiftedNow = new Date(now.getTime() + TAIPEI_OFFSET_MS);
+  const shiftedStartMs = Date.UTC(
+    shiftedNow.getUTCFullYear(),
+    shiftedNow.getUTCMonth(),
+    shiftedNow.getUTCDate(),
+    0,
+    0,
+    0,
+    0
+  );
+  const start = new Date(shiftedStartMs - TAIPEI_OFFSET_MS);
+  const end = new Date(start.getTime() + DAY_MS);
+
+  return { start, end };
 }
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
@@ -261,27 +277,68 @@ function buildGrammarHint(item: Grammar) {
   return parts.join("｜") || "選出正確的中文意思";
 }
 
-function pickVocabularyCandidatesWithBookmarkBias(
-  items: ReviewVocabularyCandidate[],
-  limit: number
-) {
-  const shuffledItems = shuffle(items);
-  const bookmarkedItems = shuffledItems.filter((item) => item.bookmarked);
-  const regularItems = shuffledItems.filter((item) => !item.bookmarked);
-  const targetBookmarkedCount = Math.ceil(limit * BOOKMARKED_REVIEW_RATIO);
+function reviewPriorityWeight(item: ReviewVocabularyCandidate, nowMs: number) {
+  const msUntilDue = item.nextReviewAt.getTime() - nowMs;
+  let weight = 1;
 
-  const pickedBookmarked = bookmarkedItems.slice(0, targetBookmarkedCount);
-  const remainingSlots = Math.max(limit - pickedBookmarked.length, 0);
-  const pickedRegular = regularItems.slice(0, remainingSlots);
-
-  if (pickedBookmarked.length + pickedRegular.length >= limit) {
-    return shuffle([...pickedBookmarked, ...pickedRegular]).slice(0, limit);
+  if (msUntilDue <= 0) {
+    weight = 8;
+  } else if (msUntilDue <= 20 * MINUTE_MS) {
+    weight = 6;
+  } else if (msUntilDue <= DAY_MS) {
+    weight = 4;
+  } else if (msUntilDue <= DAY_MS * 3) {
+    weight = 2.5;
+  } else if (msUntilDue <= DAY_MS * 7) {
+    weight = 1.5;
   }
 
-  const pickedIds = new Set([...pickedBookmarked, ...pickedRegular].map((item) => item.id));
-  const remainingItems = shuffledItems.filter((item) => !pickedIds.has(item.id));
+  if (item.bookmarked) {
+    weight *= 1.2;
+  }
 
-  return shuffle([...pickedBookmarked, ...pickedRegular, ...remainingItems]).slice(0, limit);
+  if (item.wrongCount > 0) {
+    weight *= 1.4;
+  }
+
+  return weight;
+}
+
+function pickVocabularyCandidatesByPriority(items: ReviewVocabularyCandidate[], limit: number, now = new Date()) {
+  if (items.length <= limit) {
+    return shuffle(items);
+  }
+
+  const pool = [...items];
+  const picked: ReviewVocabularyCandidate[] = [];
+  const nowMs = now.getTime();
+
+  while (picked.length < limit && pool.length > 0) {
+    const weights = pool.map((item) => reviewPriorityWeight(item, nowMs));
+    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+
+    if (totalWeight <= 0) {
+      picked.push(...shuffle(pool).slice(0, limit - picked.length));
+      break;
+    }
+
+    const roll = Math.random() * totalWeight;
+    let cumulative = 0;
+    let selectedIndex = 0;
+
+    for (let index = 0; index < pool.length; index += 1) {
+      cumulative += weights[index];
+      if (roll <= cumulative) {
+        selectedIndex = index;
+        break;
+      }
+    }
+
+    picked.push(pool[selectedIndex]);
+    pool.splice(selectedIndex, 1);
+  }
+
+  return picked;
 }
 
 export async function importLesson(parsedLesson: ParsedLesson, category: LessonCategory) {
@@ -299,7 +356,7 @@ export async function importLesson(parsedLesson: ParsedLesson, category: LessonC
             original: sentence.original,
             translationZh: sentence.translationZh,
             nextReviewAt: now,
-            reviewStage: 0
+            reviewStage: -1
           }))
         },
         vocabularies: {
@@ -311,7 +368,7 @@ export async function importLesson(parsedLesson: ParsedLesson, category: LessonC
             exampleSentence: vocabulary.exampleSentence,
             exampleTranslation: vocabulary.exampleTranslation,
             nextReviewAt: now,
-            reviewStage: 0
+            reviewStage: -1
           }))
         },
         grammarItems: {
@@ -323,7 +380,7 @@ export async function importLesson(parsedLesson: ParsedLesson, category: LessonC
             exampleSentence: grammar.exampleSentence,
             exampleTranslation: grammar.exampleTranslation,
             nextReviewAt: now,
-            reviewStage: 0
+            reviewStage: -1
           }))
         }
       }
@@ -525,7 +582,7 @@ export async function updateLesson(lessonId: number, parsedLesson: ParsedLesson,
             original: sentence.original,
             translationZh: sentence.translationZh,
             nextReviewAt: new Date(),
-            reviewStage: 0
+            reviewStage: -1
           }))
         },
         vocabularies: {
@@ -537,7 +594,7 @@ export async function updateLesson(lessonId: number, parsedLesson: ParsedLesson,
             exampleSentence: vocabulary.exampleSentence,
             exampleTranslation: vocabulary.exampleTranslation,
             nextReviewAt: new Date(),
-            reviewStage: 0
+            reviewStage: -1
           }))
         },
         grammarItems: {
@@ -549,7 +606,7 @@ export async function updateLesson(lessonId: number, parsedLesson: ParsedLesson,
             exampleSentence: grammar.exampleSentence,
             exampleTranslation: grammar.exampleTranslation,
             nextReviewAt: new Date(),
-            reviewStage: 0
+            reviewStage: -1
           }))
         }
       }
@@ -759,21 +816,31 @@ export async function updateVocabularyMastered(vocabularyId: number, mastered: b
 
 export async function listDueReviewCards(
   limit = 20,
-  mode: "all" | "wrong" = "all"
+  mode: "all" | "wrong" | "today" = "all"
 ): Promise<ReviewCard[]> {
   const now = new Date();
+  const { start: taipeiDayStart, end: taipeiDayEnd } = getTaipeiDayRange(now);
   const vocabularyWhere: Prisma.VocabularyWhereInput = {
     mastered: false,
     meaningZh: {
       not: ""
     },
-    nextReviewAt: {
-      lte: now
-    },
     ...(mode === "wrong"
       ? {
           wrongCount: {
             gt: 0
+          }
+        }
+      : {}),
+    ...(mode === "today"
+      ? {
+          lesson: {
+            is: {
+              createdAt: {
+                gte: taipeiDayStart,
+                lt: taipeiDayEnd
+              }
+            }
           }
         }
       : {})
@@ -786,10 +853,10 @@ export async function listDueReviewCards(
       { nextReviewAt: "asc" },
       { id: "asc" }
     ],
-    take: Math.max(limit * 8, 50)
+    take: Math.max(limit * 30, 200)
   });
 
-  const selectedVocabularies = pickVocabularyCandidatesWithBookmarkBias(vocabularies, limit);
+  const selectedVocabularies = pickVocabularyCandidatesByPriority(vocabularies, limit, now);
 
   const vocabularyCards: ReviewCard[] = selectedVocabularies.map((item) => ({
     id: item.id,
@@ -837,7 +904,7 @@ export async function getStats() {
   return stats;
 }
 
-export async function getDashboardData(mode: "all" | "wrong" = "all"): Promise<DashboardData> {
+export async function getDashboardData(mode: "all" | "wrong" | "today" = "all"): Promise<DashboardData> {
   const [lessons, cards, stats] = await Promise.all([
     listLessons(),
     listDueReviewCards(20, mode),
@@ -868,9 +935,10 @@ export async function submitReview(input: {
       throw new Error("找不到要更新的複習卡片。");
     }
 
+    const normalizedStage = current.reviewCount === 0 && current.reviewStage === 0 ? -1 : current.reviewStage;
     const nextStage = input.remembered
-      ? Math.min(current.reviewStage + 1, ebbinghausSchedule.length - 1)
-      : 0;
+      ? Math.min(normalizedStage + 1, ebbinghausSchedule.length - 1)
+      : -1;
     const computedNextReviewAt = input.remembered
       ? new Date(Date.now() + ebbinghausSchedule[nextStage])
       : new Date(Date.now() + AGAIN_MS);

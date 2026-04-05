@@ -47,6 +47,7 @@ import BookmarkRoundedIcon from "@mui/icons-material/BookmarkRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import DoneRoundedIcon from "@mui/icons-material/DoneRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import VolumeUpRoundedIcon from "@mui/icons-material/VolumeUpRounded";
 import type {
   ImportedLesson,
   LessonCategory,
@@ -648,6 +649,24 @@ export default function HomePage() {
     });
   };
 
+  const patchSelectedLessonVocabulary = (
+    vocabularyId: number,
+    patch: Partial<Pick<LessonDetail["vocabulary"][number], "bookmarked" | "mastered">>,
+  ) => {
+    setSelectedLesson((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        vocabulary: current.vocabulary.map((item) =>
+          item.id === vocabularyId ? { ...item, ...patch } : item,
+        ),
+      };
+    });
+  };
+
   const openMobileTab = (
     nextTab:
       | "home"
@@ -1074,9 +1093,7 @@ export default function HomePage() {
 
     try {
       const { response, payload } = await requestJson<{
-        cards: ReviewCard[];
         stats: DashboardStats;
-        lesson: LessonDetail | null;
         data: { vocabularyId: number; bookmarked: boolean; lessonId: number };
       }>(`/api/vocabulary/${vocabularyId}`, {
         method: "PATCH",
@@ -1086,17 +1103,22 @@ export default function HomePage() {
         body: JSON.stringify({ bookmarked }),
       });
 
-      if (!response.ok || !("lesson" in payload)) {
+      if (!response.ok || !("data" in payload)) {
         throw new Error("error" in payload ? payload.error : "更新標記失敗");
       }
 
-      syncCardsAndStats(payload.cards, payload.stats);
-      if (payload.lesson) {
-        setSelectedLesson(payload.lesson);
-        upsertLessonSummary(payload.lesson);
+      if ("stats" in payload) {
+        setStats(payload.stats);
       }
+      patchSelectedLessonVocabulary(vocabularyId, { bookmarked });
       if (vocabularyViewMode === "bookmarked") {
-        await loadBookmarkedVocabulary();
+        if (!bookmarked) {
+          setBookmarkedVocabulary((current) =>
+            current.filter((item) => item.id !== vocabularyId),
+          );
+        } else {
+          await loadBookmarkedVocabulary();
+        }
       }
     } catch (bookmarkError) {
       setError(
@@ -1118,9 +1140,7 @@ export default function HomePage() {
 
     try {
       const { response, payload } = await requestJson<{
-        cards: ReviewCard[];
         stats: DashboardStats;
-        lesson: LessonDetail | null;
         data: { vocabularyId: number; mastered: boolean; lessonId: number };
       }>(`/api/vocabulary/${card.id}`, {
         method: "PATCH",
@@ -1130,18 +1150,25 @@ export default function HomePage() {
         body: JSON.stringify({ mastered: true }),
       });
 
-      if (!response.ok || !("lesson" in payload)) {
+      if (!response.ok || !("data" in payload)) {
         throw new Error(
           "error" in payload ? payload.error : "更新學會狀態失敗",
         );
       }
 
-      syncCardsAndStats(payload.cards, payload.stats);
-      if (payload.lesson) {
-        setSelectedLesson(payload.lesson);
-        upsertLessonSummary(payload.lesson);
+      if ("stats" in payload) {
+        setStats(payload.stats);
       }
-      await loadWrongCards();
+      patchSelectedLessonVocabulary(card.id, { mastered: true });
+      setCards((current) =>
+        current.filter((item) => !(item.kind === "vocabulary" && item.id === card.id)),
+      );
+      setWrongCards((current) =>
+        current.filter((item) => !(item.kind === "vocabulary" && item.id === card.id)),
+      );
+      setWrongPreviewCards((current) =>
+        current.filter((item) => !(item.kind === "vocabulary" && item.id === card.id)),
+      );
       if (vocabularyViewMode === "bookmarked") {
         await loadBookmarkedVocabulary();
       }
@@ -1538,6 +1565,54 @@ export default function HomePage() {
     }
   };
 
+  const speakJapanese = (text: string) => {
+    const content = text.trim();
+    if (!content || typeof window === "undefined") {
+      return;
+    }
+
+    const synth = window.speechSynthesis;
+    if (!synth) {
+      setError("目前裝置不支援語音播放。");
+      return;
+    }
+
+    const pickJapaneseVoice = (voices: SpeechSynthesisVoice[]) => {
+      const japaneseVoices = voices.filter((voice) =>
+        voice.lang.toLowerCase().startsWith("ja"),
+      );
+
+      if (japaneseVoices.length === 0) {
+        return null;
+      }
+
+      const femaleNamePatterns = [
+        /female/i,
+        /woman/i,
+        /kyoko/i,
+        /sayaka/i,
+        /haruka/i,
+        /nanami/i,
+      ];
+
+      const femaleVoice = japaneseVoices.find((voice) =>
+        femaleNamePatterns.some((pattern) => pattern.test(voice.name)),
+      );
+
+      return femaleVoice ?? japaneseVoices[0];
+    };
+
+    synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(content);
+    utterance.lang = "ja-JP";
+    utterance.rate = 1;
+    const preferredVoice = pickJapaneseVoice(synth.getVoices());
+    if (preferredVoice) {
+      utterance.voice = preferredVoice;
+    }
+    synth.speak(utterance);
+  };
+
   const renderDetailContent = (lesson: LessonDetail) => {
     if (activeDetailTab === "sentences") {
       return (
@@ -1570,9 +1645,24 @@ export default function HomePage() {
                 transition: "background-color 260ms ease",
               }}
             >
-              <Typography sx={articleSentenceSx}>
-                {display.original}
-              </Typography>
+              <Stack
+                direction="row"
+                spacing={1}
+                alignItems="flex-start"
+                justifyContent="flex-start"
+              >
+                <Typography sx={{ ...articleSentenceSx, pr: 0.25 }}>
+                  {display.original}
+                </Typography>
+                <IconButton
+                  size="small"
+                  aria-label={`播放句子發音 ${display.original}`}
+                  onClick={() => speakJapanese(display.original)}
+                  sx={{ mt: -0.1, color: "#8E775E" }}
+                >
+                  <VolumeUpRoundedIcon fontSize="small" />
+                </IconButton>
+              </Stack>
               <Typography sx={articleTranslationSx}>
                 {display.translationZh}
               </Typography>
@@ -1655,12 +1745,27 @@ export default function HomePage() {
                 alignItems="flex-start"
                 justifyContent="space-between"
               >
-                <Typography
-                  sx={{ fontSize: 16, fontWeight: 700, lineHeight: 1.7, pr: 1 }}
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  alignItems="center"
+                  sx={{ minWidth: 0, pr: 1 }}
                 >
-                  {item.word}
-                  {item.reading ? `（${item.reading}）` : ""}
-                </Typography>
+                  <Typography
+                    sx={{ fontSize: 16, fontWeight: 700, lineHeight: 1.7 }}
+                  >
+                    {item.word}
+                    {item.reading ? `（${item.reading}）` : ""}
+                  </Typography>
+                  <IconButton
+                    size="small"
+                    aria-label={`播放單字發音 ${item.word}`}
+                    onClick={() => speakJapanese(item.word)}
+                    sx={{ color: "#8E775E" }}
+                  >
+                    <VolumeUpRoundedIcon fontSize="small" />
+                  </IconButton>
+                </Stack>
                 <IconButton
                   size="small"
                   aria-label={
@@ -1986,17 +2091,6 @@ export default function HomePage() {
             >
               <Chip
                 size="small"
-                label={
-                  item.kind === "sentence"
-                    ? "句子"
-                    : item.kind === "vocabulary"
-                      ? "單字"
-                      : "文法"
-                }
-                color="secondary"
-              />
-              <Chip
-                size="small"
                 label={item.lessonTitle}
                 variant="outlined"
                 clickable
@@ -2078,12 +2172,24 @@ export default function HomePage() {
           </Typography>
         </Stack>
 
-        <Typography
-          variant={compact ? "h6" : "h5"}
-          sx={{ fontWeight: 700, lineHeight: 1.5 }}
-        >
-          {currentCard.prompt}
-        </Typography>
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <Typography
+            variant={compact ? "h6" : "h5"}
+            sx={{ fontWeight: 700, lineHeight: 1.5 }}
+          >
+            {currentCard.prompt}
+          </Typography>
+          {currentCard.kind === "vocabulary" ? (
+            <IconButton
+              size="small"
+              aria-label={`播放單字發音 ${currentCard.prompt}`}
+              onClick={() => speakJapanese(currentCard.prompt)}
+              sx={{ color: "#8E775E" }}
+            >
+              <VolumeUpRoundedIcon fontSize="small" />
+            </IconButton>
+          ) : null}
+        </Stack>
         {currentCard.hint ? (
           <Typography color="text.secondary" sx={{ mt: 1, lineHeight: 1.9 }}>
             {currentCard.hint}
@@ -2394,7 +2500,7 @@ export default function HomePage() {
                           }}
                           sx={{ py: 1, borderRadius: "16px", minHeight: 44 }}
                         >
-                          複習 {pastReviewVocabularyTotal} 詞
+                          過往複習 {pastReviewVocabularyTotal} 詞
                         </Button>
                         <Button
                           variant="outlined"
@@ -3094,6 +3200,14 @@ export default function HomePage() {
               onChange={(_event, value) => {
                 if (value === "bookmarks") {
                   void openBookmarksPage("mobile");
+                  return;
+                }
+
+                if (value === "review") {
+                  setReviewMode("all");
+                  setReviewProgressCount(0);
+                  void loadDashboard("all");
+                  openMobileTab("review", mobileTab);
                   return;
                 }
 

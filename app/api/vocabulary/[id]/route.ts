@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getStats, getLessonDetail, listDueReviewCards, updateVocabularyBookmark, updateVocabularyMastered } from "@/lib/study-db";
+import { getStats, updateVocabularyBookmark, updateVocabularyMastered } from "@/lib/study-db";
 
 export const runtime = "nodejs";
 
@@ -24,16 +24,10 @@ export async function PATCH(
       typeof body.mastered === "boolean"
         ? await updateVocabularyMastered(vocabularyId, body.mastered)
         : await updateVocabularyBookmark(vocabularyId, body.bookmarked as boolean);
-    const [lesson, cards, stats] = await Promise.all([
-      getLessonDetail(result.lessonId),
-      listDueReviewCards(),
-      getStats()
-    ]);
+    const stats = await getStats();
 
     return NextResponse.json({
       data: result,
-      lesson,
-      cards,
       stats
     });
   } catch (error) {

@@ -26,8 +26,25 @@ type LessonWithCounts = Pick<Lesson, "id" | "title" | "category" | "createdAt"> 
   };
 };
 
-type ReviewVocabularyCandidate = Vocabulary & {
-  lesson: Lesson;
+type ReviewVocabularyCandidate = Pick<
+  Vocabulary,
+  | "id"
+  | "lessonId"
+  | "sectionTitle"
+  | "word"
+  | "reading"
+  | "bookmarked"
+  | "meaningZh"
+  | "exampleSentence"
+  | "nextReviewAt"
+  | "reviewCount"
+  | "correctCount"
+  | "wrongCount"
+  | "reviewStage"
+> & {
+  lesson: {
+    title: string;
+  };
 };
 
 type DashboardStats = {
@@ -204,7 +221,10 @@ function normalizeLesson(lesson: LessonWithCounts): ImportedLesson {
   };
 }
 
-function vocabularyCardChoices(current: Vocabulary, pool: Vocabulary[]) {
+function vocabularyCardChoices(
+  current: Pick<Vocabulary, "id" | "meaningZh">,
+  pool: Array<Pick<Vocabulary, "id" | "meaningZh">>,
+) {
   const distractors = shuffle(
     pool
       .filter((item) => item.id !== current.id)
@@ -226,7 +246,7 @@ function sentenceCardChoices(current: Sentence, pool: Sentence[]) {
   return shuffle([current.translationZh, ...distractors]);
 }
 
-function buildVocabularyHint(item: Vocabulary) {
+function buildVocabularyHint(item: Pick<Vocabulary, "reading" | "exampleSentence">) {
   const parts = [];
 
   if (item.reading) {
@@ -848,12 +868,31 @@ export async function listDueReviewCards(
 
   const vocabularies = await prisma.vocabulary.findMany({
     where: vocabularyWhere,
-    include: { lesson: true },
+    select: {
+      id: true,
+      lessonId: true,
+      sectionTitle: true,
+      word: true,
+      reading: true,
+      bookmarked: true,
+      meaningZh: true,
+      exampleSentence: true,
+      nextReviewAt: true,
+      reviewCount: true,
+      correctCount: true,
+      wrongCount: true,
+      reviewStage: true,
+      lesson: {
+        select: {
+          title: true
+        }
+      }
+    },
     orderBy: [
       { nextReviewAt: "asc" },
       { id: "asc" }
     ],
-    take: Math.max(limit * 30, 200)
+    take: Math.max(limit * 12, 120)
   });
 
   const selectedVocabularies = pickVocabularyCandidatesByPriority(vocabularies, limit, now);
